@@ -485,8 +485,8 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
     # Global thresholds for all tabs (using your tuned defaults)
     global_norm_lower = st.sidebar.number_input(
         "Global Lower Threshold for 0–1 Normalization (flag LOW if below)",
-        min_value=-1.0,
-        max_value=1.0,
+        min_value=-3.0,
+        max_value=3.0,
         value=-0.7,
         step=0.05
     )

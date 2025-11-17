@@ -376,25 +376,25 @@ def compute_step_normalization_and_flags(
     # Threshold lines
     fig.add_hline(
         y=norm_lower,
-        line=dict(color="black", dash="dash"),
+        line=dict(color="gray", dash="dash"),
         row=1,
         col=1
     )
     fig.add_hline(
         y=norm_upper,
-        line=dict(color="black", dash="dash"),
+        line=dict(color="gray", dash="dash"),
         row=1,
         col=1
     )
     fig.add_hline(
         y=-z_lower,
-        line=dict(color="black", dash="dash"),
+        line=dict(color="gray", dash="dash"),
         row=1,
         col=2
     )
     fig.add_hline(
         y=z_upper,
-        line=dict(color="black", dash="dash"),
+        line=dict(color="gray", dash="dash"),
         row=1,
         col=2
     )

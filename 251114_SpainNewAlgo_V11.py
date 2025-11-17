@@ -645,7 +645,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         norm_upper=global_norm_upper,
                         z_lower=global_z_lower,
                         z_upper=global_z_upper,
-                        title_suffix=f"(Bead {bead}, Smoothed)"
+                        title_suffix=f"(Bead #{bead}, Smoothed)"
                     )
 
                     for csv_name, status in status_bead.items():
@@ -821,7 +821,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         norm_upper=global_norm_upper,
                         z_lower=global_z_lower,
                         z_upper=global_z_upper,
-                        title_suffix=f"(Raw Signal, Bead {selected_bead})"
+                        title_suffix=f"• Raw Signal {signal_col} • Bead #{selected_bead}"
                     )
                     if fig_norm_raw is not None:
                         plot_top_signals(
@@ -875,7 +875,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         norm_upper=global_norm_upper,
                         z_lower=global_z_lower,
                         z_upper=global_z_upper,
-                        title_suffix=f"(Smoothed, Bead {selected_bead})"
+                        title_suffix=f"• Smoothed Signal {signal_col} • Bead #{selected_bead}" #f"(Smoothed, Bead {selected_bead})"
                     )
                     if fig_norm_sg is not None:
                         plot_top_signals(
@@ -929,7 +929,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         norm_upper=global_norm_upper,
                         z_lower=global_z_lower,
                         z_upper=global_z_upper,
-                        title_suffix=f"(Low-pass, Bead {selected_bead})"
+                        title_suffix=f"• Low-pass Signal {signal_col} • Bead #{selected_bead}" #f"(Low-pass, Bead {selected_bead})"
                     )
                     if fig_norm_lp is not None:
                         plot_top_signals(
@@ -974,7 +974,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         norm_upper=global_norm_upper,
                         z_lower=global_z_lower,
                         z_upper=global_z_upper,
-                        title_suffix=f"(Curve Fit, Bead {selected_bead})"
+                        title_suffix=f"• Curve Fit Signal {signal_col} • Bead #{selected_bead}" #f"(Curve Fit, Bead {selected_bead})"
                     )
                     if fig_norm_cf is not None:
                         plot_top_signals(

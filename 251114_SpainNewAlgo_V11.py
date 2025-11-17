@@ -820,7 +820,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                             ref_transformed_raw,
                             test_transformed_raw,
                             status_raw,
-                            title=f"Raw Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[{global_z_lower},{global_z_upper}] Step[{global_step_interval}]", #f"Analysis for Signal {signal_col} • Raw Signal (Bead {selected_bead}, TEST, colored by global thresholds)",
+                            title=f"Raw Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[-{global_z_lower},{global_z_upper}] Step[{global_step_interval}]", #f"Analysis for Signal {signal_col} • Raw Signal (Bead {selected_bead}, TEST, colored by global thresholds)",
                             y_label="Signal Value"
                         )
                         st.plotly_chart(fig_norm_raw, use_container_width=True)
@@ -874,7 +874,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                             ref_transformed_sg,
                             test_transformed_sg,
                             status_sg,
-                            title=f"Smoothed Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[{global_z_lower},{global_z_upper}] Step[{global_step_interval}]", #f"Analysis for Signal {signal_col} • Smoothed Signal (Bead {selected_bead}, TEST, colored by global thresholds)",
+                            title=f"Smoothed Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[-{global_z_lower},{global_z_upper}] Step[{global_step_interval}]", #f"Analysis for Signal {signal_col} • Smoothed Signal (Bead {selected_bead}, TEST, colored by global thresholds)",
                             y_label="Signal Value"
                         )
                         st.plotly_chart(fig_norm_sg, use_container_width=True)
@@ -928,7 +928,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                             ref_transformed_lp,
                             test_transformed_lp,
                             status_lp,
-                            title=f"Low-pass Filtered Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[{global_z_lower},{global_z_upper}] Step[{global_step_interval}]", #f"Analysis for Signal {signal_col} • Low-pass Filtered Signal (Bead {selected_bead}, TEST, colored by global thresholds)",
+                            title=f"Low-pass Filtered Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[-{global_z_lower},{global_z_upper}] Step[{global_step_interval}]", #f"Analysis for Signal {signal_col} • Low-pass Filtered Signal (Bead {selected_bead}, TEST, colored by global thresholds)",
                             y_label="Signal Value"
                         )
                         st.plotly_chart(fig_norm_lp, use_container_width=True)
@@ -973,7 +973,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                             ref_transformed_cf,
                             test_transformed_cf,
                             status_cf,
-                            title=f"Curve-fit Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[{global_z_lower},{global_z_upper}] Step[{global_step_interval}]", #f"Analysis for Signal {signal_col} • Curve-fit Signal (Bead {selected_bead}, TEST, colored by global thresholds)",
+                            title=f"Curve-fit Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[-{global_z_lower},{global_z_upper}] Step[{global_step_interval}]", #f"Analysis for Signal {signal_col} • Curve-fit Signal (Bead {selected_bead}, TEST, colored by global thresholds)",
                             y_label="Signal Value"
                         )
                         st.plotly_chart(fig_norm_cf, use_container_width=True)

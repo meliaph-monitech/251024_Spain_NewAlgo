@@ -480,6 +480,7 @@ def plot_top_signals(ref_transformed, test_transformed, status_map, title, y_lab
         yaxis_title=y_label,
         legend=dict(orientation="h")
     )
+    st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
 # STEP 3: Analysis (Requires both OK & TEST segmented)

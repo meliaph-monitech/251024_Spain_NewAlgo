@@ -404,8 +404,16 @@ def compute_step_normalization_and_flags(
     fig.update_xaxes(title_text="Step Index", row=1, col=2)
     fig.update_yaxes(title_text="Z-score", row=1, col=2)
 
+    # fig.update_layout(
+    #     title=f"Per-step Normalization {title_suffix}",
+    #     legend=dict(orientation="h")
+    # )
+
     fig.update_layout(
-        title=f"Per-step Normalization {title_suffix}",
+        title=dict(
+            text=f"Per-step Normalization {title_suffix}",
+            font=dict(size=22)
+        ),
         legend=dict(orientation="h")
     )
 

@@ -465,13 +465,21 @@ def plot_top_signals(ref_transformed, test_transformed, status_map, title, y_lab
             )
         )
 
+    # fig.update_layout(
+    #     title=title,
+    #     xaxis_title="Index",
+    #     yaxis_title=y_label,
+    #     legend=dict(orientation="h")
+    # )
+    # st.plotly_chart(fig, use_container_width=True)
+
     fig.update_layout(
-        title=title,
+        title_text=title,
+        title_font=dict(size=28),   # ← title font size
         xaxis_title="Index",
         yaxis_title=y_label,
         legend=dict(orientation="h")
     )
-    st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
 # STEP 3: Analysis (Requires both OK & TEST segmented)

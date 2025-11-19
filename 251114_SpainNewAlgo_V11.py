@@ -80,7 +80,7 @@ if uploaded_ok_zip:
             )
             st.session_state.seg_thresh = st.sidebar.number_input(
                 "Segmentation Threshold (OK & TEST share this)",
-                value=1.0
+                value=0.5
             )
             segment_ok_btn = st.sidebar.button("Segment OK Files")
 

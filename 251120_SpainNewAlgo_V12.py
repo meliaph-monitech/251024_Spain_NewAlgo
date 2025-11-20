@@ -26,10 +26,10 @@ st.title("Spain New Algo V12 – Weld NOK Detection & Clustering")
 st.markdown(
     """
     This app:
-    1. Segments weld beads from OK and TEST CSV files.\n
-    2. Uses OK beads as reference to compute per-step 0–1 normalization & Z-scores.\n
-    3. Flags TEST beads as LOW / HIGH / OK based on global thresholds.\n
-    4. Summarizes suspected NOK beads.\n
+    1. Segments weld beads from OK and TEST CSV files.  
+    2. Uses OK beads as reference to compute per-step 0–1 normalization & Z-scores.  
+    3. Flags TEST beads as LOW / HIGH / OK based on global thresholds.  
+    4. Summarizes suspected NOK beads.  
     5. **(NEW in V12)** Clusters NOK features and visualizes them in upper/lower exceed scatter plots.
     """
 )
@@ -642,7 +642,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
 
     st.sidebar.header("Step 3: Global Thresholds & Step Interval")
 
-    # Global thresholds for all tabs (using your tuned defaults from V11)
+    # Global thresholds for all tabs
     global_norm_lower = st.sidebar.number_input(
         "Global Lower Threshold for 0–1 Normalization (flag LOW if below)",
         min_value=-5.0,
@@ -725,12 +725,6 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
             )
 
             # Tabs:
-            # 0: Summary (global)
-            # 1: Raw
-            # 2: Smoothed (Savitzky)
-            # 3: Low-pass Filter
-            # 4: Curve Fit
-            # 5: Clustering (NEW)
             tabs = st.tabs([
                 "Summary",
                 "Raw Signal",
@@ -767,10 +761,9 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                     df_summary = df_summary_current.copy()
                     st.dataframe(df_summary, use_container_width=True)
 
-                    # ---- Scatter summaries under the table (same as V11) ----
-                    # Color rule:
-                    # - CSV_File name contains "NG"  -> Correct NOK detection  -> red
-                    # - CSV_File name does NOT have "NG" -> Over-detected NOK  -> black
+                    # Color rule for summary scatter:
+                    # - Is_NG True  -> red (Correct NOK)
+                    # - Is_NG False -> black (Over-detected NOK)
 
                     # 1) Norm_Low_Exceed vs Bead
                     df1 = df_summary[df_summary["Norm_Low_Exceed"].notna()]
@@ -783,8 +776,12 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 y=df1["Norm_Low_Exceed"],
                                 mode="markers",
                                 marker=dict(size=8, color=colors1),
-                                text=df1["CSV_File"],
-                                hovertemplate="CSV: %{text}<br>Bead: %{x}<br>Norm_Low_Exceed: %{y}<extra></extra>"
+                                text=(
+                                    "File: " + df1["CSV_File"].astype(str)
+                                    + "<br>Bead: " + df1["Bead"].astype(str)
+                                    + "<br>Norm_Low_Exceed: " + df1["Norm_Low_Exceed"].round(4).astype(str)
+                                ),
+                                hovertemplate="%{text}<extra></extra>"
                             )
                         )
                         fig1.update_layout(
@@ -805,8 +802,12 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 y=df2["Norm_High_Exceed"],
                                 mode="markers",
                                 marker=dict(size=8, color=colors2),
-                                text=df2["CSV_File"],
-                                hovertemplate="CSV: %{text}<br>Bead: %{x}<br>Norm_High_Exceed: %{y}<extra></extra>"
+                                text=(
+                                    "File: " + df2["CSV_File"].astype(str)
+                                    + "<br>Bead: " + df2["Bead"].astype(str)
+                                    + "<br>Norm_High_Exceed: " + df2["Norm_High_Exceed"].round(4).astype(str)
+                                ),
+                                hovertemplate="%{text}<extra></extra>"
                             )
                         )
                         fig2.update_layout(
@@ -827,8 +828,12 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 y=df3["Z_Low_Exceed"],
                                 mode="markers",
                                 marker=dict(size=8, color=colors3),
-                                text=df3["CSV_File"],
-                                hovertemplate="CSV: %{text}<br>Bead: %{x}<br>Z_Low_Exceed: %{y}<extra></extra>"
+                                text=(
+                                    "File: " + df3["CSV_File"].astype(str)
+                                    + "<br>Bead: " + df3["Bead"].astype(str)
+                                    + "<br>Z_Low_Exceed: " + df3["Z_Low_Exceed"].round(4).astype(str)
+                                ),
+                                hovertemplate="%{text}<extra></extra>"
                             )
                         )
                         fig3.update_layout(
@@ -849,8 +854,12 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 y=df4["Z_High_Exceed"],
                                 mode="markers",
                                 marker=dict(size=8, color=colors4),
-                                text=df4["CSV_File"],
-                                hovertemplate="CSV: %{text}<br>Bead: %{x}<br>Z_High_Exceed: %{y}<extra></extra>"
+                                text=(
+                                    "File: " + df4["CSV_File"].astype(str)
+                                    + "<br>Bead: " + df4["Bead"].astype(str)
+                                    + "<br>Z_High_Exceed: " + df4["Z_High_Exceed"].round(4).astype(str)
+                                ),
+                                hovertemplate="%{text}<extra></extra>"
                             )
                         )
                         fig4.update_layout(
@@ -1076,7 +1085,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
             with tabs[5]:
                 st.subheader("Clustering of NOK Features (NIR / VIS)")
 
-                # We treat first column as NIR, second as VIS (as you described).
+                # We treat first column as NIR, second as VIS
                 all_cols = example_bead_df.columns.tolist()
                 if len(all_cols) < 2:
                     st.info("Need at least 2 signal columns to form NIR (1st) and VIS (2nd).")
@@ -1089,7 +1098,6 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         f"- VIS signal assumed as **2nd column**: `{vis_col}`"
                     )
 
-                    # Optionally choose which signal(s) to compute clustering for
                     mode = st.radio(
                         "Select which signal to cluster",
                         options=["NIR only", "VIS only", "Both (NIR & VIS)"],
@@ -1121,13 +1129,11 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                             st.info(f"No suspected NOK for {label} with current thresholds.")
                             return
 
-                        # Show raw summary table
                         st.dataframe(df_sig, use_container_width=True)
 
-                        # --- Upper exceed features (Norm_High_Exceed vs Z_High_Exceed) ---
+                        # Upper exceed features (Norm_High_Exceed vs Z_High_Exceed)
                         df_u = df_sig.dropna(subset=["Norm_High_Exceed", "Z_High_Exceed"]).copy()
-                        if not df_u.empty and len(df_u) >= 2:
-                            # KMeans clustering in this 2D space
+                        if len(df_u) >= 2:
                             n_clusters_u = st.slider(
                                 f"{label} Upper: Number of clusters (K)",
                                 min_value=2,
@@ -1135,17 +1141,17 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 value=min(3, len(df_u)),
                                 step=1
                             )
-                            km_u = KMeans(n_clusters=n_clusters_u, random_state=0, n_init="auto")
+                            km_u = KMeans(n_clusters=n_clusters_u, random_state=0, n_init=10)
                             X_u = df_u[["Norm_High_Exceed", "Z_High_Exceed"]].to_numpy()
                             df_u["Cluster_Upper"] = km_u.fit_predict(X_u)
                         else:
-                            df_u["Cluster_Upper"] = np.nan if not df_u.empty else []
+                            if not df_u.empty:
+                                df_u["Cluster_Upper"] = np.nan
                             n_clusters_u = 0
 
-                        # --- Lower exceed features (distance below threshold) ---
+                        # Lower exceed features (distance below threshold)
                         df_l = df_sig.dropna(subset=["Norm_Low_Exceed", "Z_Low_Exceed"]).copy()
-                        if not df_l.empty and len(df_l) >= 2:
-                            # distance below thresholds, so positive = more severe
+                        if len(df_l) >= 2:
                             df_l["X_Lower"] = np.maximum(
                                 0.0,
                                 global_norm_lower - df_l["Norm_Low_Exceed"]
@@ -1161,13 +1167,19 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 value=min(3, len(df_l)),
                                 step=1
                             )
-                            km_l = KMeans(n_clusters=n_clusters_l, random_state=0, n_init="auto")
+                            km_l = KMeans(n_clusters=n_clusters_l, random_state=0, n_init=10)
                             X_l = df_l[["X_Lower", "Y_Lower"]].to_numpy()
                             df_l["Cluster_Lower"] = km_l.fit_predict(X_l)
                         else:
                             if not df_l.empty:
-                                df_l["X_Lower"] = 0.0
-                                df_l["Y_Lower"] = 0.0
+                                df_l["X_Lower"] = np.maximum(
+                                    0.0,
+                                    global_norm_lower - df_l["Norm_Low_Exceed"]
+                                )
+                                df_l["Y_Lower"] = np.maximum(
+                                    0.0,
+                                    -df_l["Z_Low_Exceed"] - global_z_lower
+                                )
                                 df_l["Cluster_Lower"] = np.nan
                             n_clusters_l = 0
 
@@ -1181,31 +1193,27 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                             )
                         )
 
-                        # Color mapping by Status (same as line colors)
-                        def status_color(s):
-                            if s == "LOW":
-                                return "red"
-                            elif s == "HIGH":
-                                return "orange"
-                            else:
-                                return "green"
+                        # Color mapping by Is_NG (true NOK vs over-detected)
+                        def ng_color(is_ng):
+                            return "red" if is_ng else "black"
 
                         # Marker symbols by cluster id
                         symbol_list = ["circle", "square", "diamond", "triangle-up", "cross", "x"]
 
                         # ----- Upper subplot -----
                         if not df_u.empty:
-                            for idx, row in df_u.iterrows():
+                            for _, row in df_u.iterrows():
                                 x_val = row["Norm_High_Exceed"]
                                 y_val = row["Z_High_Exceed"]
-                                color = status_color(row["Status"])
-                                if n_clusters_u > 0 and not pd.isna(row["Cluster_Upper"]):
-                                    cid = int(row["Cluster_Upper"])
-                                    symbol = symbol_list[cid % len(symbol_list)]
-                                    cluster_text = f"Cluster {cid}"
+                                color = ng_color(row["Is_NG"])
+                                cid = row.get("Cluster_Upper", np.nan)
+                                if not pd.isna(cid):
+                                    cid_int = int(cid)
+                                    symbol = symbol_list[cid_int % len(symbol_list)]
+                                    cluster_text = f"Cluster {cid_int}"
                                 else:
                                     symbol = "circle"
-                                    cluster_text = "NoCluster"
+                                    cluster_text = "Cluster: N/A"
 
                                 fig_sig.add_trace(
                                     go.Scatter(
@@ -1218,10 +1226,13 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                             symbol=symbol
                                         ),
                                         text=(
-                                            f"CSV: {row['CSV_File']}<br>"
+                                            f"File: {row['CSV_File']}<br>"
                                             f"Bead: {row['Bead']}<br>"
-                                            f"Status: {row['Status']}<br>"
-                                            f"Cluster: {cluster_text}"
+                                            f"Is_NG: {row['Is_NG']}<br>"
+                                            f"Status(Algo): {row['Status']}<br>"
+                                            f"Norm_High_Exceed: {row['Norm_High_Exceed']:.4f}<br>"
+                                            f"Z_High_Exceed: {row['Z_High_Exceed']:.4f}<br>"
+                                            f"{cluster_text}"
                                         ),
                                         hovertemplate="%{text}<extra></extra>"
                                     ),
@@ -1242,17 +1253,18 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
 
                         # ----- Lower subplot -----
                         if not df_l.empty:
-                            for idx, row in df_l.iterrows():
+                            for _, row in df_l.iterrows():
                                 x_val = row["X_Lower"]
                                 y_val = row["Y_Lower"]
-                                color = status_color(row["Status"])
-                                if n_clusters_l > 0 and not pd.isna(row["Cluster_Lower"]):
-                                    cid = int(row["Cluster_Lower"])
-                                    symbol = symbol_list[cid % len(symbol_list)]
-                                    cluster_text = f"Cluster {cid}"
+                                color = ng_color(row["Is_NG"])
+                                cid = row.get("Cluster_Lower", np.nan)
+                                if not pd.isna(cid):
+                                    cid_int = int(cid)
+                                    symbol = symbol_list[cid_int % len(symbol_list)]
+                                    cluster_text = f"Cluster {cid_int}"
                                 else:
                                     symbol = "circle"
-                                    cluster_text = "NoCluster"
+                                    cluster_text = "Cluster: N/A"
 
                                 fig_sig.add_trace(
                                     go.Scatter(
@@ -1265,10 +1277,13 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                             symbol=symbol
                                         ),
                                         text=(
-                                            f"CSV: {row['CSV_File']}<br>"
+                                            f"File: {row['CSV_File']}<br>"
                                             f"Bead: {row['Bead']}<br>"
-                                            f"Status: {row['Status']}<br>"
-                                            f"Cluster: {cluster_text}"
+                                            f"Is_NG: {row['Is_NG']}<br>"
+                                            f"Status(Algo): {row['Status']}<br>"
+                                            f"Norm_Low_Exceed: {row['Norm_Low_Exceed']:.4f}<br>"
+                                            f"Z_Low_Exceed: {row['Z_Low_Exceed']:.4f}<br>"
+                                            f"{cluster_text}"
                                         ),
                                         hovertemplate="%{text}<extra></extra>"
                                     ),

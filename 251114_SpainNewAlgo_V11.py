@@ -680,7 +680,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                     df1 = df_summary[df_summary["Norm_Low_Exceed"].notna()]
                     if not df1.empty:
                         fig1 = go.Figure()
-                        colors1 = ["red" if is_ng else "black" for is_ng in df1["Is_NG"]]
+                        colors1 = ["red" if is_ng else "grey" for is_ng in df1["Is_NG"]]
                         fig1.add_trace(
                             go.Scatter(
                                 x=df1["Bead"],
@@ -704,7 +704,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                     df2 = df_summary[df_summary["Norm_High_Exceed"].notna()]
                     if not df2.empty:
                         fig2 = go.Figure()
-                        colors2 = ["red" if is_ng else "black" for is_ng in df2["Is_NG"]]
+                        colors2 = ["red" if is_ng else "grey" for is_ng in df2["Is_NG"]]
                         fig2.add_trace(
                             go.Scatter(
                                 x=df2["Bead"],
@@ -728,7 +728,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                     df3 = df_summary[df_summary["Z_Low_Exceed"].notna()]
                     if not df3.empty:
                         fig3 = go.Figure()
-                        colors3 = ["red" if is_ng else "black" for is_ng in df3["Is_NG"]]
+                        colors3 = ["red" if is_ng else "grey" for is_ng in df3["Is_NG"]]
                         fig3.add_trace(
                             go.Scatter(
                                 x=df3["Bead"],
@@ -751,7 +751,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                     df4 = df_summary[df_summary["Z_High_Exceed"].notna()]
                     if not df4.empty:
                         fig4 = go.Figure()
-                        colors4 = ["red" if is_ng else "black" for is_ng in df4["Is_NG"]]
+                        colors4 = ["red" if is_ng else "grey" for is_ng in df4["Is_NG"]]
                         fig4.add_trace(
                             go.Scatter(
                                 x=df4["Bead"],

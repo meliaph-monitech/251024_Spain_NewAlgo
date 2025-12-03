@@ -524,7 +524,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
     global_z_upper = st.sidebar.number_input(
         "Global Z-score Threshold (flag HIGH if above +T)",
         min_value=0.5,
-        max_value=10.0,
+        max_value=20.0,
         value=10,
         step=0.25
     )

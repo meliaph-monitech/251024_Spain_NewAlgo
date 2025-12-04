@@ -565,7 +565,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
         "Global Step Interval (points)",
         min_value=10,
         max_value=500,
-        value=20,
+        value=50,
         step=10
     )
 

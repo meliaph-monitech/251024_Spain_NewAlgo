@@ -16,7 +16,7 @@ PLOTLY_CONFIG = {
     'toImageButtonOptions': {
         'format': 'svg',
         'filename': 'bead_analysis_export',
-        'height': 200, # <<<< EDIT THIS VALUE (in pixels) FOR DESIRED FULL SCREEN HEIGHT
+        'height': 280, # <<<< EDIT THIS VALUE (in pixels) FOR DESIRED FULL SCREEN HEIGHT
         'width': 1200 # Optional: Set a consistent width for exports
     }
 }

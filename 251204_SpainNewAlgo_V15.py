@@ -9,6 +9,18 @@ from scipy.signal import savgol_filter, butter, filtfilt
 
 st.set_page_config(layout="wide")
 
+# --- Plotly Configuration for Full Screen Height ---
+# When you click the 'Full Screen' button (or camera icon) this height is used.
+PLOTLY_CONFIG = {
+    'displaylogo': False,
+    'toImageButtonOptions': {
+        'format': 'svg',
+        'filename': 'bead_analysis_export',
+        'height': 1000, # <<<< EDIT THIS VALUE (in pixels) FOR DESIRED FULL SCREEN HEIGHT
+        'width': 1200 # Optional: Set a consistent width for exports
+    }
+}
+
 # --- Utility: Bead Segmentation ---
 def segment_beads(df, column, threshold):
     start_indices, end_indices = [], []
@@ -208,10 +220,10 @@ def compute_step_normalization_and_flags(
 
     Version: median-centered, std-scaled, min/max-bounded
 
-    - OK reference center  = per-step median (robust to outliers)
-    - OK reference spread  = per-step standard deviation
-    - Norm band            = per-step min/max of OK data
-    - Z-score              = (TEST - median) / std
+    - OK reference center   = per-step median (robust to outliers)
+    - OK reference spread   = per-step standard deviation
+    - Norm band             = per-step min/max of OK data
+    - Z-score               = (TEST - median) / std
     """
 
     if len(ref_obs) == 0:
@@ -458,7 +470,8 @@ def compute_step_normalization_and_flags(
 # ============================================================
 # Helper: Plot Top (Transformed TEST + OK in gray)
 # ============================================================
-def plot_top_signals(ref_transformed, test_transformed, status_map, title, y_label):
+def plot_top_signals(ref_transformed, test_transformed, status_map, title, y_label, config):
+    # Added 'config' parameter
     fig = go.Figure()
 
     # OK reference signals in gray
@@ -509,22 +522,15 @@ def plot_top_signals(ref_transformed, test_transformed, status_map, title, y_lab
             )
         )
 
-    # fig.update_layout(
-    #     title=title,
-    #     xaxis_title="Index",
-    #     yaxis_title=y_label,
-    #     legend=dict(orientation="h")
-    # )
-    # st.plotly_chart(fig, use_container_width=True)
-
     fig.update_layout(
         title_text=title,
-        title_font=dict(size=22),   # ← title font size
+        title_font=dict(size=22),    # ← title font size
         xaxis_title="Index",
         yaxis_title=y_label,
         legend=dict(orientation="h")
     )
-    st.plotly_chart(fig, use_container_width=True)
+    # Passed the config argument here to apply custom height for full screen
+    st.plotly_chart(fig, use_container_width=True, config=config) 
 
 # ============================================================
 # STEP 3: Analysis (Requires both OK & TEST segmented)
@@ -673,7 +679,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         poly=summary_poly
                     )
 
-                    _, status_bead, metrics_bead = compute_step_normalization_and_flags(
+                    fig_norm_summary, status_bead, metrics_bead = compute_step_normalization_and_flags(
                         ref_transformed_bead,
                         test_transformed_bead,
                         step_interval=global_step_interval,
@@ -683,13 +689,18 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         z_upper=global_z_upper,
                         title_suffix=f"(Bead #{bead}, Smoothed)"
                     )
+                    
+                    # Display the normalization figure for the current bead in the summary tab
+                    if fig_norm_summary is not None:
+                         st.plotly_chart(fig_norm_summary, use_container_width=True, config=PLOTLY_CONFIG)
+
 
                     for csv_name, status in status_bead.items():
                         if status == "ok":
                             continue
                         m = metrics_bead.get(csv_name, {})
                         rows.append({
-                            "CSV_File": csv_name,              # full name
+                            "CSV_File": csv_name,                # full name
                             "Bead": bead,
                             "Status": "LOW" if status == "low" else "HIGH",
                             "Norm_Low_Exceed": m.get("Norm_Low_Exceed", np.nan),
@@ -701,17 +712,13 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                 if rows:
                     df_summary = pd.DataFrame(rows)
                     df_summary = df_summary.sort_values(["CSV_File", "Bead"]).reset_index(drop=True)
-                
+                    
                     # Mark which rows are true NOKs based on file name containing "NG"
                     df_summary["Is_NG"] = df_summary["CSV_File"].str.contains("NG", case=False)
-                
+                    
                     st.dataframe(df_summary, use_container_width=True)
-                
+                    
                     # ---- Scatter summaries under the table ----
-                    # Color rule:
-                    # - CSV_File name contains "NG"  -> Correct NOK detection  -> red
-                    # - CSV_File name does NOT have "NG" -> Over-detected NOK  -> black
-
                     # 1) Norm_Low_Exceed vs Bead
                     df1 = df_summary[df_summary["Norm_Low_Exceed"].notna()]
                     if not df1.empty:
@@ -728,13 +735,12 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                             )
                         )
 
-
                         fig1.update_layout(
                             title="Norm_Low_Exceed vs Bead",
                             xaxis_title="Bead Number",
                             yaxis_title="Norm_Low_Exceed"
                         )
-                        st.plotly_chart(fig1, use_container_width=True)
+                        st.plotly_chart(fig1, use_container_width=True, config=PLOTLY_CONFIG) # Added config
 
                     # 2) Norm_High_Exceed vs Bead
                     df2 = df_summary[df_summary["Norm_High_Exceed"].notna()]
@@ -752,13 +758,12 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                             )
                         )
 
-
                         fig2.update_layout(
                             title="Norm_High_Exceed vs Bead",
                             xaxis_title="Bead Number",
                             yaxis_title="Norm_High_Exceed"
                         )
-                        st.plotly_chart(fig2, use_container_width=True)
+                        st.plotly_chart(fig2, use_container_width=True, config=PLOTLY_CONFIG) # Added config
 
                     # 3) Z_Low_Exceed vs Bead
                     df3 = df_summary[df_summary["Z_Low_Exceed"].notna()]
@@ -781,7 +786,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                             xaxis_title="Bead Number",
                             yaxis_title="Z_Low_Exceed"
                         )
-                        st.plotly_chart(fig3, use_container_width=True)
+                        st.plotly_chart(fig3, use_container_width=True, config=PLOTLY_CONFIG) # Added config
 
                     # 4) Z_High_Exceed vs Bead
                     df4 = df_summary[df_summary["Z_High_Exceed"].notna()]
@@ -804,7 +809,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                             xaxis_title="Bead Number",
                             yaxis_title="Z_High_Exceed"
                         )
-                        st.plotly_chart(fig4, use_container_width=True)
+                        st.plotly_chart(fig4, use_container_width=True, config=PLOTLY_CONFIG) # Added config
 
                 else:
                     st.info("No suspected NOK beads found with current thresholds.")
@@ -860,47 +865,35 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         title_suffix=f"• Raw Signal {signal_col} • Bead #{selected_bead}"
                     )
                     if fig_norm_raw is not None:
+                        # Display the normalization figure.
+                        st.plotly_chart(fig_norm_raw, use_container_width=True, config=PLOTLY_CONFIG) # Added config
+                        
+                        # Display the top signals figure.
                         plot_top_signals(
                             ref_transformed_raw,
                             test_transformed_raw,
                             status_raw,
-                            title=f"Raw Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[-{global_z_lower},{global_z_upper}] Step[{global_step_interval}]", #f"Analysis for Signal {signal_col} • Raw Signal (Bead {selected_bead}, TEST, colored by global thresholds)",
-                            y_label="Signal Value"
+                            title=f"Raw Signal {signal_col} (Bead #{selected_bead})",
+                            y_label=signal_col,
+                            config=PLOTLY_CONFIG # Passed config to helper function
                         )
-                        st.plotly_chart(fig_norm_raw, use_container_width=True)
 
             # ------------ Tab 2: Smoothed (Savitzky) ------------
             with tabs[2]:
-                st.subheader("Smoothed Signal (Top) + Per-step Normalization (Bottom)")
+                st.subheader("Smoothed Signal (Savitzky-Golay)")
+
+                st.sidebar.markdown("#### Savitzky-Golay Filter Settings")
+                sg_window = st.sidebar.slider("Window Length (odd number)", 3, 201, 51, step=2, key='sg_window')
+                sg_poly = st.sidebar.slider("Polynomial Order", 1, 10, 2, key='sg_poly')
+
                 if not ref_observations or not test_observations:
                     st.warning("No data for this bead in OK or TEST set.")
                 else:
-                    window = st.slider(
-                        "Savitzky-Golay Window Length",
-                        min_value=5,
-                        max_value=101,
-                        value=51,
-                        step=10
-                    )
-                    poly = st.slider(
-                        "Polynomial Order",
-                        min_value=2,
-                        max_value=5,
-                        value=2,
-                        step=1
-                    )
-
                     ref_transformed_sg = compute_transformed_signals(
-                        ref_observations,
-                        mode="savgol",
-                        window=window,
-                        poly=poly
+                        ref_observations, mode="savgol", window=sg_window, poly=sg_poly
                     )
                     test_transformed_sg = compute_transformed_signals(
-                        test_observations,
-                        mode="savgol",
-                        window=window,
-                        poly=poly
+                        test_observations, mode="savgol", window=sg_window, poly=sg_poly
                     )
 
                     fig_norm_sg, status_sg, _ = compute_step_normalization_and_flags(
@@ -911,50 +904,36 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         norm_upper=global_norm_upper,
                         z_lower=global_z_lower,
                         z_upper=global_z_upper,
-                        title_suffix=f"• Smoothed Signal {signal_col} • Bead #{selected_bead}" #f"(Smoothed, Bead {selected_bead})"
+                        title_suffix=f"• Smoothed Signal {signal_col} • Bead #{selected_bead}"
                     )
                     if fig_norm_sg is not None:
+                        st.plotly_chart(fig_norm_sg, use_container_width=True, config=PLOTLY_CONFIG) # Added config
+                        
                         plot_top_signals(
                             ref_transformed_sg,
                             test_transformed_sg,
                             status_sg,
-                            title=f"Smoothed Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[-{global_z_lower},{global_z_upper}] Step[{global_step_interval}]", #f"Analysis for Signal {signal_col} • Smoothed Signal (Bead {selected_bead}, TEST, colored by global thresholds)",
-                            y_label="Signal Value"
+                            title=f"Smoothed Signal {signal_col} (Bead #{selected_bead})",
+                            y_label=f"{signal_col} (Savitzky-Golay)",
+                            config=PLOTLY_CONFIG # Passed config to helper function
                         )
-                        st.plotly_chart(fig_norm_sg, use_container_width=True)
 
             # ------------ Tab 3: Low-pass Filter ------------
             with tabs[3]:
-                st.subheader("Low-pass Filtered Signal (Top) + Per-step Normalization (Bottom)")
+                st.subheader("Low-pass Filtered Signal (Butterworth)")
+
+                st.sidebar.markdown("#### Low-pass Filter Settings")
+                lp_cutoff = st.sidebar.slider("Cutoff Frequency (0.0 to 1.0)", 0.01, 0.5, 0.1, step=0.01, key='lp_cutoff')
+                lp_order = st.sidebar.slider("Filter Order", 1, 10, 2, key='lp_order')
+
                 if not ref_observations or not test_observations:
                     st.warning("No data for this bead in OK or TEST set.")
                 else:
-                    cutoff = st.slider(
-                        "Low-pass Cutoff Frequency (normalized, 0.01–0.5)",
-                        min_value=0.01,
-                        max_value=0.5,
-                        value=0.1,
-                        step=0.01
-                    )
-                    order = st.slider(
-                        "Filter Order",
-                        min_value=1,
-                        max_value=5,
-                        value=2,
-                        step=1
-                    )
-
                     ref_transformed_lp = compute_transformed_signals(
-                        ref_observations,
-                        mode="lowpass",
-                        cutoff=cutoff,
-                        order=order
+                        ref_observations, mode="lowpass", cutoff=lp_cutoff, order=lp_order
                     )
                     test_transformed_lp = compute_transformed_signals(
-                        test_observations,
-                        mode="lowpass",
-                        cutoff=cutoff,
-                        order=order
+                        test_observations, mode="lowpass", cutoff=lp_cutoff, order=lp_order
                     )
 
                     fig_norm_lp, status_lp, _ = compute_step_normalization_and_flags(
@@ -965,59 +944,55 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         norm_upper=global_norm_upper,
                         z_lower=global_z_lower,
                         z_upper=global_z_upper,
-                        title_suffix=f"• Low-pass Signal {signal_col} • Bead #{selected_bead}" #f"(Low-pass, Bead {selected_bead})"
+                        title_suffix=f"• Low-pass Signal {signal_col} • Bead #{selected_bead}"
                     )
                     if fig_norm_lp is not None:
+                        st.plotly_chart(fig_norm_lp, use_container_width=True, config=PLOTLY_CONFIG) # Added config
+                        
                         plot_top_signals(
                             ref_transformed_lp,
                             test_transformed_lp,
                             status_lp,
-                            title=f"Low-pass Filtered Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[-{global_z_lower},{global_z_upper}] Step[{global_step_interval}]", #f"Analysis for Signal {signal_col} • Low-pass Filtered Signal (Bead {selected_bead}, TEST, colored by global thresholds)",
-                            y_label="Signal Value"
+                            title=f"Low-pass Signal {signal_col} (Bead #{selected_bead})",
+                            y_label=f"{signal_col} (Low-pass)",
+                            config=PLOTLY_CONFIG # Passed config to helper function
                         )
-                        st.plotly_chart(fig_norm_lp, use_container_width=True)
-
-            # ------------ Tab 4: Curve Fit ------------
+            
+            # ------------ Tab 4: Curve Fit (Polynomial) ------------
             with tabs[4]:
-                st.subheader("Curve Fit Signal (Top) + Per-step Normalization (Bottom)")
+                st.subheader("Polynomial Curve Fit")
+
+                st.sidebar.markdown("#### Polynomial Fit Settings")
+                poly_deg = st.sidebar.slider("Polynomial Degree", 1, 50, 25, key='poly_deg')
+
                 if not ref_observations or not test_observations:
                     st.warning("No data for this bead in OK or TEST set.")
                 else:
-                    deg = st.slider(
-                        "Curve Fit Polynomial Degree",
-                        min_value=1,
-                        max_value=100,
-                        value=25,
-                        step=1
+                    ref_transformed_poly = compute_transformed_signals(
+                        ref_observations, mode="poly", deg=poly_deg
+                    )
+                    test_transformed_poly = compute_transformed_signals(
+                        test_observations, mode="poly", deg=poly_deg
                     )
 
-                    ref_transformed_cf = compute_transformed_signals(
-                        ref_observations,
-                        mode="poly",
-                        deg=deg
-                    )
-                    test_transformed_cf = compute_transformed_signals(
-                        test_observations,
-                        mode="poly",
-                        deg=deg
-                    )
-
-                    fig_norm_cf, status_cf, _ = compute_step_normalization_and_flags(
-                        ref_transformed_cf,
-                        test_transformed_cf,
+                    fig_norm_poly, status_poly, _ = compute_step_normalization_and_flags(
+                        ref_transformed_poly,
+                        test_transformed_poly,
                         step_interval=global_step_interval,
                         norm_lower=global_norm_lower,
                         norm_upper=global_norm_upper,
                         z_lower=global_z_lower,
                         z_upper=global_z_upper,
-                        title_suffix=f"• Curve Fit Signal {signal_col} • Bead #{selected_bead}" #f"(Curve Fit, Bead {selected_bead})"
+                        title_suffix=f"• Curve Fit Signal {signal_col} • Bead #{selected_bead}"
                     )
-                    if fig_norm_cf is not None:
+                    if fig_norm_poly is not None:
+                        st.plotly_chart(fig_norm_poly, use_container_width=True, config=PLOTLY_CONFIG) # Added config
+                        
                         plot_top_signals(
-                            ref_transformed_cf,
-                            test_transformed_cf,
-                            status_cf,
-                            title=f"Curve-fit Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[-{global_z_lower},{global_z_upper}] Step[{global_step_interval}]", #f"Analysis for Signal {signal_col} • Curve-fit Signal (Bead {selected_bead}, TEST, colored by global thresholds)",
-                            y_label="Signal Value"
+                            ref_transformed_poly,
+                            test_transformed_poly,
+                            status_poly,
+                            title=f"Curve Fit Signal {signal_col} (Bead #{selected_bead})",
+                            y_label=f"{signal_col} (Poly Fit)",
+                            config=PLOTLY_CONFIG # Passed config to helper function
                         )
-                        st.plotly_chart(fig_norm_cf, use_container_width=True)

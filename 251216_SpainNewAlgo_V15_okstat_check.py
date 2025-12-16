@@ -3,8 +3,6 @@ import pandas as pd
 import numpy as np
 import zipfile
 import os
-import io
-import csv
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy.signal import savgol_filter, butter, filtfilt
@@ -12,71 +10,8 @@ from scipy.signal import savgol_filter, butter, filtfilt
 st.set_page_config(layout="wide")
 
 # ============================================================
-# Robust CSV Reader (fixes most pandas.errors.ParserError cases)
-# ============================================================
-def robust_read_csv(file_obj, filename: str) -> pd.DataFrame:
-    """
-    Read a CSV safely from a ZipExtFile-like object.
-
-    What it handles:
-      - encoding issues (utf-8-sig/utf-8/cp1252/latin1)
-      - delimiter issues (comma/semicolon/tab/pipe) via sniffing
-      - ParserError from inconsistent rows via fallback to python engine
-      - provides Streamlit-friendly error context (file name + hints)
-
-    Notes:
-      - If your CSV contains embedded newlines inside quoted fields, the python engine
-        is often more tolerant.
-      - If the file is not actually CSV (e.g., an Excel export with odd formatting),
-        this will still fail, but will tell you which file caused it.
-    """
-    raw = file_obj.read()  # bytes
-
-    # 1) Decode
-    decoded = None
-    last_decode_err = None
-    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin1"):
-        try:
-            decoded = raw.decode(enc)
-            break
-        except Exception as e:
-            last_decode_err = e
-
-    if decoded is None:
-        raise last_decode_err
-
-    # 2) Sniff delimiter
-    sample = decoded[:20000]
-    sep = ","
-    try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t", "|"])
-        sep = dialect.delimiter
-    except Exception:
-        # If sniff fails, keep default comma
-        sep = ","
-
-    # 3) Try C engine first (fast), then fallback to python engine
-    def _read_with(engine: str):
-        # on_bad_lines works in modern pandas; if your pandas is older,
-        # remove it or replace with error_bad_lines=False (deprecated).
-        return pd.read_csv(
-            io.StringIO(decoded),
-            sep=sep,
-            engine=engine,
-            on_bad_lines="skip",   # <-- prevents app crash on a few malformed rows
-        )
-
-    try:
-        return _read_with("c")
-    except pd.errors.ParserError:
-        # fallback engine is usually more forgiving with messy quoting/newlines
-        return _read_with("python")
-    except UnicodeError:
-        # extremely rare here because we already decoded
-        return _read_with("python")
-
-
 # --- Utility: Bead Segmentation ---
+# ============================================================
 def segment_beads(df, column, threshold):
     start_indices, end_indices = [], []
     signal = df[column].to_numpy()
@@ -93,7 +28,6 @@ def segment_beads(df, column, threshold):
             i += 1
     return list(zip(start_indices, end_indices))
 
-
 def aggregate_for_step(x, y, interval):
     """Aggregate x and y into buckets of given interval for step plotting."""
     if interval <= 0:
@@ -105,14 +39,81 @@ def aggregate_for_step(x, y, interval):
     agg_x = agg_x[:len(agg_y)]
     return agg_x, np.array(agg_y)
 
-
 def short_label(csv_name: str) -> str:
     """Use first 6 characters of basename (without extension) as label."""
     base = os.path.splitext(os.path.basename(csv_name))[0]
     return base[:6] if len(base) > 6 else base
 
+# ============================================================
+# --- NEW: OK reference stats builders + download helpers ---
+# ============================================================
+def compute_ok_reference_stats(ref_obs, step_interval, bead=None, signal=None, transform_mode=None, transform_params=None):
+    """
+    Build per-step OK reference stats ONLY from OK signals.
+    Returns a DataFrame with columns:
+      Bead, Signal, Transform, Transform_Params, Step_Interval, Step_Index,
+      OK_Count, mu_median, sigma_std, min_ok, max_ok, denom
+    """
+    if not ref_obs:
+        return pd.DataFrame()
 
+    ok_step_arrays = []
+    for obs in ref_obs:
+        y = np.asarray(obs["transformed"], dtype=float)
+        x = np.arange(len(y))
+        _, step_y = aggregate_for_step(x, y, step_interval)
+        if step_y.size == 0:
+            continue
+        ok_step_arrays.append(step_y)
+
+    if not ok_step_arrays:
+        return pd.DataFrame()
+
+    # IMPORTANT: OK reference length should be based on OK only (not TEST)
+    min_steps_ok = min(arr.shape[0] for arr in ok_step_arrays)
+    if min_steps_ok <= 0:
+        return pd.DataFrame()
+
+    ok_matrix = np.vstack([arr[:min_steps_ok] for arr in ok_step_arrays])  # (K, S)
+    K, S = ok_matrix.shape
+
+    # ---- OK statistics per step ----
+    mu = np.median(ok_matrix, axis=0)
+    sigma = ok_matrix.std(axis=0, ddof=1)
+    sigma[sigma < 1e-12] = 1e-12
+
+    min_ok = ok_matrix.min(axis=0)
+    max_ok = ok_matrix.max(axis=0)
+    denom = max_ok - min_ok
+    denom[denom < 1e-12] = 1e-12
+
+    # Pack transform params
+    if transform_params is None:
+        transform_params = {}
+    transform_params_str = "" if not transform_params else ";".join([f"{k}={v}" for k, v in transform_params.items()])
+
+    df_ref = pd.DataFrame({
+        "Bead": bead,
+        "Signal": signal,
+        "Transform": transform_mode,
+        "Transform_Params": transform_params_str,
+        "Step_Interval": step_interval,
+        "Step_Index": np.arange(S, dtype=int),
+        "OK_Count": K,
+        "mu_median": mu,
+        "sigma_std": sigma,
+        "min_ok": min_ok,
+        "max_ok": max_ok,
+        "denom": denom,
+    })
+    return df_ref
+
+def csv_bytes_from_df(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False).encode("utf-8")
+
+# ============================================================
 # --- Session State ---
+# ============================================================
 if "segmented_ok" not in st.session_state:
     st.session_state.segmented_ok = None
 if "segmented_test" not in st.session_state:
@@ -121,7 +122,6 @@ if "seg_col" not in st.session_state:
     st.session_state.seg_col = None
 if "seg_thresh" not in st.session_state:
     st.session_state.seg_thresh = None
-
 
 # ============================================================
 # STEP 1: Upload & Segment OK REFERENCE SET
@@ -134,71 +134,45 @@ uploaded_ok_zip = st.sidebar.file_uploader(
 )
 
 if uploaded_ok_zip:
-    with zipfile.ZipFile(uploaded_ok_zip, "r") as zip_ref:
-        csv_names_ok = [name for name in zip_ref.namelist() if name.lower().endswith(".csv")]
+    with zipfile.ZipFile(uploaded_ok_zip, 'r') as zip_ref:
+        csv_names_ok = [name for name in zip_ref.namelist() if name.endswith('.csv')]
         if not csv_names_ok:
             st.sidebar.error("No CSV files found in the OK ZIP.")
         else:
-            # Read a sample to list columns (robustly)
             first_ok_csv = csv_names_ok[0]
-            try:
-                with zip_ref.open(first_ok_csv) as f:
-                    sample_df_ok = robust_read_csv(f, first_ok_csv)
-            except Exception as e:
-                st.sidebar.error(f"Failed reading sample OK CSV: {os.path.basename(first_ok_csv)}")
-                st.sidebar.exception(e)
-                sample_df_ok = None
+            with zip_ref.open(first_ok_csv) as f:
+                sample_df_ok = pd.read_csv(f)
+            ok_columns = sample_df_ok.columns.tolist()
 
-            if sample_df_ok is not None and not sample_df_ok.empty:
-                ok_columns = sample_df_ok.columns.tolist()
+            st.session_state.seg_col = st.sidebar.selectbox(
+                "Column for Segmentation (OK set)",
+                ok_columns,
+                key="seg_col_ok"
+            )
+            st.session_state.seg_thresh = st.sidebar.number_input(
+                "Segmentation Threshold (OK & TEST share this)",
+                value=0.5
+            )
+            segment_ok_btn = st.sidebar.button("Segment OK Files")
 
-                st.session_state.seg_col = st.sidebar.selectbox(
-                    "Column for Segmentation (OK set)",
-                    ok_columns,
-                    key="seg_col_ok"
-                )
-                st.session_state.seg_thresh = st.sidebar.number_input(
-                    "Segmentation Threshold (OK & TEST share this)",
-                    value=0.5
-                )
-                segment_ok_btn = st.sidebar.button("Segment OK Files")
-
-                # Perform segmentation for OK set
-                if segment_ok_btn:
-                    segmented_ok = {}
-                    bad_files = []
-
-                    with zipfile.ZipFile(uploaded_ok_zip, "r") as zip_ref2:
-                        for file_name in zip_ref2.namelist():
-                            if not file_name.lower().endswith(".csv"):
-                                continue
-
-                            try:
-                                with zip_ref2.open(file_name) as f:
-                                    df = robust_read_csv(f, file_name)
-
-                                bead_ranges = segment_beads(
-                                    df,
-                                    st.session_state.seg_col,
-                                    st.session_state.seg_thresh
-                                )
-
-                                bead_dict = {}
-                                for idx, (start, end) in enumerate(bead_ranges, start=1):
-                                    bead_dict[idx] = df.iloc[start:end + 1].reset_index(drop=True)
-
-                                segmented_ok[os.path.basename(file_name)] = bead_dict
-
-                            except Exception as e:
-                                bad_files.append(os.path.basename(file_name))
-                                st.error(f"❌ OK file failed to parse: {os.path.basename(file_name)}")
-                                st.exception(e)
-
-                    st.session_state.segmented_ok = segmented_ok
-                    if bad_files:
-                        st.warning(f"Some OK files were skipped due to parsing errors: {bad_files}")
-                    st.success("✅ OK reference beads segmented and stored.")
-
+    if 'segment_ok_btn' in locals() and segment_ok_btn:
+        segmented_ok = {}
+        with zipfile.ZipFile(uploaded_ok_zip, 'r') as zip_ref:
+            for file_name in zip_ref.namelist():
+                if file_name.endswith('.csv'):
+                    with zip_ref.open(file_name) as f:
+                        df = pd.read_csv(f)
+                    bead_ranges = segment_beads(
+                        df,
+                        st.session_state.seg_col,
+                        st.session_state.seg_thresh
+                    )
+                    bead_dict = {}
+                    for idx, (start, end) in enumerate(bead_ranges, start=1):
+                        bead_dict[idx] = df.iloc[start:end + 1].reset_index(drop=True)
+                    segmented_ok[os.path.basename(file_name)] = bead_dict
+        st.session_state.segmented_ok = segmented_ok
+        st.success("✅ OK reference beads segmented and stored.")
 
 # ============================================================
 # STEP 2: Upload & Segment TEST SET
@@ -215,40 +189,24 @@ if uploaded_test_zip:
         st.sidebar.warning("Please segment the OK reference set first to define segmentation settings.")
     else:
         segment_test_btn = st.sidebar.button("Segment TEST Files")
-        if segment_test_btn:
+        if 'segment_test_btn' in locals() and segment_test_btn:
             segmented_test = {}
-            bad_files = []
-
-            with zipfile.ZipFile(uploaded_test_zip, "r") as zip_ref:
+            with zipfile.ZipFile(uploaded_test_zip, 'r') as zip_ref:
                 for file_name in zip_ref.namelist():
-                    if not file_name.lower().endswith(".csv"):
-                        continue
-                    try:
+                    if file_name.endswith('.csv'):
                         with zip_ref.open(file_name) as f:
-                            df = robust_read_csv(f, file_name)
-
+                            df = pd.read_csv(f)
                         bead_ranges = segment_beads(
                             df,
                             st.session_state.seg_col,
                             st.session_state.seg_thresh
                         )
-
                         bead_dict = {}
                         for idx, (start, end) in enumerate(bead_ranges, start=1):
                             bead_dict[idx] = df.iloc[start:end + 1].reset_index(drop=True)
-
                         segmented_test[os.path.basename(file_name)] = bead_dict
-
-                    except Exception as e:
-                        bad_files.append(os.path.basename(file_name))
-                        st.error(f"❌ TEST file failed to parse: {os.path.basename(file_name)}")
-                        st.exception(e)
-
             st.session_state.segmented_test = segmented_test
-            if bad_files:
-                st.warning(f"Some TEST files were skipped due to parsing errors: {bad_files}")
             st.success("✅ TEST beads segmented and stored.")
-
 
 # ============================================================
 # Helper: Transform Signals
@@ -277,7 +235,7 @@ def compute_transformed_signals(observations, mode, **params):
         elif mode == "lowpass":
             cutoff = float(params.get("cutoff", 0.1))
             order = int(params.get("order", 2))
-            b, a = butter(order, cutoff, btype="low", analog=False)
+            b, a = butter(order, cutoff, btype='low', analog=False)
             if len(y) > 3 * max(len(a), len(b)):
                 transformed = filtfilt(b, a, y)
             else:
@@ -295,13 +253,14 @@ def compute_transformed_signals(observations, mode, **params):
         else:
             transformed = y
 
-        transformed_obs.append({**obs, "transformed": transformed})
+        transformed_obs.append({
+            **obs,
+            "transformed": transformed
+        })
     return transformed_obs
-
 
 # ============================================================
 # Helper: Compute per-step normalization & flags + metrics
-#         + OK step meta preview table
 # ============================================================
 def compute_step_normalization_and_flags(
     ref_obs,
@@ -311,13 +270,17 @@ def compute_step_normalization_and_flags(
     norm_upper,
     z_lower,
     z_upper,
-    title_suffix,
-    preview_steps=5,
-    preview_mode="first"  # "first" or "top_abs"
+    title_suffix
 ):
+    """
+    - OK reference center  = per-step median (robust to outliers)
+    - OK reference spread  = per-step standard deviation
+    - Norm band            = per-step min/max of OK data
+    - Z-score              = (TEST - median) / std
+    """
     if len(ref_obs) == 0:
         st.warning("No OK reference signals available for normalization.")
-        return None, {}, {}, pd.DataFrame()
+        return None, {}, {}
 
     ok_step_arrays = []
     ok_step_meta = []
@@ -326,14 +289,19 @@ def compute_step_normalization_and_flags(
         y = np.asarray(obs["transformed"], dtype=float)
         x = np.arange(len(y))
         _, step_y = aggregate_for_step(x, y, step_interval)
+
         if step_y.size == 0:
             continue
+
         ok_step_arrays.append(step_y)
-        ok_step_meta.append({"csv": obs["csv"], "step_y": step_y})
+        ok_step_meta.append({
+            "csv": obs["csv"],
+            "step_y": step_y
+        })
 
     if len(ok_step_arrays) == 0:
         st.warning("No valid OK step data for normalization.")
-        return None, {}, {}, pd.DataFrame()
+        return None, {}, {}
 
     test_step_arrays = []
     test_step_meta = []
@@ -342,25 +310,32 @@ def compute_step_normalization_and_flags(
         y = np.asarray(obs["transformed"], dtype=float)
         x = np.arange(len(y))
         _, step_y = aggregate_for_step(x, y, step_interval)
+
         if step_y.size == 0:
             continue
+
         test_step_arrays.append(step_y)
-        test_step_meta.append({"csv": obs["csv"], "step_y": step_y})
+        test_step_meta.append({
+            "csv": obs["csv"],
+            "step_y": step_y
+        })
 
     if len(test_step_arrays) == 0:
         st.warning("No valid TEST step data for normalization.")
-        return None, {}, {}, pd.DataFrame()
+        return None, {}, {}
 
+    # Common min_steps across OK + TEST for plotting/comparison
     min_steps_ok = min(arr.shape[0] for arr in ok_step_arrays)
     min_steps_test = min(arr.shape[0] for arr in test_step_arrays)
     min_steps = min(min_steps_ok, min_steps_test)
 
     if min_steps == 0:
         st.warning("Step data are empty after aggregation.")
-        return None, {}, {}, pd.DataFrame()
+        return None, {}, {}
 
-    ok_matrix = np.vstack([arr[:min_steps] for arr in ok_step_arrays])
+    ok_matrix = np.vstack([arr[:min_steps] for arr in ok_step_arrays])  # (K, S)
 
+    # ---- OK statistics per step ----
     mu = np.median(ok_matrix, axis=0)
     sigma = ok_matrix.std(axis=0, ddof=1)
     sigma[sigma < 1e-12] = 1e-12
@@ -372,27 +347,6 @@ def compute_step_normalization_and_flags(
 
     step_indices = np.arange(min_steps)
 
-    # OK preview table
-    preview_rows = []
-    for meta in ok_step_meta:
-        step_y_ok = meta["step_y"][:min_steps]
-
-        if preview_mode == "top_abs":
-            idx = np.argsort(np.abs(step_y_ok))[::-1][:preview_steps]
-            row = {"CSV_File": meta["csv"]}
-            for rank, i in enumerate(idx, start=1):
-                row[f"Rank{rank}_StepIndex"] = int(i)
-                row[f"Rank{rank}_Value"] = float(step_y_ok[i])
-        else:
-            top_n = step_y_ok[:preview_steps]
-            row = {"CSV_File": meta["csv"]}
-            for i, v in enumerate(top_n):
-                row[f"Step_{i}"] = float(v)
-
-        preview_rows.append(row)
-
-    ok_preview_df = pd.DataFrame(preview_rows)
-
     fig = make_subplots(
         rows=1,
         cols=2,
@@ -402,7 +356,7 @@ def compute_step_normalization_and_flags(
     status_map = {}
     metrics_map = {}
 
-    # OK reference in gray
+    # OK reference signals
     for meta in ok_step_meta:
         step_y_ok = meta["step_y"][:min_steps]
         norm_ok = (step_y_ok - min_ok) / denom
@@ -418,7 +372,8 @@ def compute_step_normalization_and_flags(
                 legendgroup="OK_REF",
                 showlegend=True
             ),
-            row=1, col=1
+            row=1,
+            col=1
         )
         fig.add_trace(
             go.Scatter(
@@ -429,7 +384,8 @@ def compute_step_normalization_and_flags(
                 legendgroup="OK_REF",
                 showlegend=False
             ),
-            row=1, col=2
+            row=1,
+            col=2
         )
 
     # TEST signals
@@ -487,7 +443,8 @@ def compute_step_normalization_and_flags(
                 legendgroup=name,
                 showlegend=True
             ),
-            row=1, col=1
+            row=1,
+            col=1
         )
         fig.add_trace(
             go.Scatter(
@@ -498,9 +455,11 @@ def compute_step_normalization_and_flags(
                 legendgroup=name,
                 showlegend=False
             ),
-            row=1, col=2
+            row=1,
+            col=2
         )
 
+    # Threshold lines
     fig.add_hline(y=norm_lower, line=dict(color="gray", dash="dash"), row=1, col=1)
     fig.add_hline(y=norm_upper, line=dict(color="gray", dash="dash"), row=1, col=1)
     fig.add_hline(y=-z_lower, line=dict(color="gray", dash="dash"), row=1, col=2)
@@ -516,8 +475,7 @@ def compute_step_normalization_and_flags(
         legend=dict(orientation="h")
     )
 
-    return fig, status_map, metrics_map, ok_preview_df
-
+    return fig, status_map, metrics_map
 
 # ============================================================
 # Helper: Plot Top (Transformed TEST + OK in gray)
@@ -530,7 +488,9 @@ def plot_top_signals(ref_transformed, test_transformed, status_map, title, y_lab
         x = np.arange(len(y))
         fig.add_trace(
             go.Scatter(
-                x=x, y=y, mode="lines",
+                x=x,
+                y=y,
+                mode="lines",
                 name=f"{short_label(obs['csv'])} (OK ref)",
                 line=dict(color="#aaaaaa", width=1),
                 legendgroup="OK_REF"
@@ -553,7 +513,9 @@ def plot_top_signals(ref_transformed, test_transformed, status_map, title, y_lab
         name = f"{short_label(csv_name)} (TEST, {label})"
         fig.add_trace(
             go.Scatter(
-                x=x, y=y, mode="lines",
+                x=x,
+                y=y,
+                mode="lines",
                 name=name,
                 line=dict(color=color, width=width),
                 legendgroup=short_label(csv_name)
@@ -568,7 +530,6 @@ def plot_top_signals(ref_transformed, test_transformed, status_map, title, y_lab
         legend=dict(orientation="h")
     )
     st.plotly_chart(fig, use_container_width=True)
-
 
 # ============================================================
 # STEP 3: Analysis (Requires both OK & TEST segmented)
@@ -607,10 +568,10 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
     test_files = sorted(segmented_test.keys())
 
     bead_ok = set()
-    for _, beads in segmented_ok.items():
+    for fname, beads in segmented_ok.items():
         bead_ok.update(beads.keys())
     bead_test = set()
-    for _, beads in segmented_test.items():
+    for fname, beads in segmented_test.items():
         bead_test.update(beads.keys())
     bead_options = sorted(bead_ok.intersection(bead_test))
 
@@ -635,7 +596,10 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
             )
 
             st.markdown(f"### Analysis for Signal **{signal_col}**")
-            st.markdown(f"- OK reference files: {len(ok_files)}  \n- TEST files: {len(test_files)}")
+            st.markdown(
+                f"- OK reference files: {len(ok_files)}  \n"
+                f"- TEST files: {len(test_files)}"
+            )
 
             tabs = st.tabs([
                 "Summary",
@@ -645,20 +609,187 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                 "Curve Fit"
             ])
 
-            # Summary tab unchanged (your original summary logic was long;
-            # keep it as-is if you already had it. If you want, I can paste the full summary
-            # section too—but it’s unrelated to the ParserError fix.)
+            # ------------ Tab 0: Global Summary (All Beads) ------------
             with tabs[0]:
-                st.info("Summary tab content omitted here for brevity. (Your existing code can stay.)")
+                st.subheader("Global Summary of Suspected NOK (All Beads, Smoothed Basis)")
 
-            # Build per-bead observations for detailed tabs
+                rows = []
+                summary_window = 51
+                summary_poly = 2
+
+                # NEW: collect OK reference stats for ALL beads (smoothed defaults)
+                all_ok_ref_rows = []
+
+                for bead in bead_options:
+                    ref_obs_bead = []
+                    for fname in ok_files:
+                        beads = segmented_ok[fname]
+                        if bead in beads:
+                            bead_df = beads[bead]
+                            if signal_col in bead_df.columns:
+                                data = bead_df[signal_col].reset_index(drop=True)
+                                ref_obs_bead.append({"csv": fname, "data": data})
+
+                    test_obs_bead = []
+                    for fname in test_files:
+                        beads = segmented_test[fname]
+                        if bead in beads:
+                            bead_df = beads[bead]
+                            if signal_col in bead_df.columns:
+                                data = bead_df[signal_col].reset_index(drop=True)
+                                test_obs_bead.append({"csv": fname, "data": data})
+
+                    if not ref_obs_bead or not test_obs_bead:
+                        continue
+
+                    ref_transformed_bead = compute_transformed_signals(
+                        ref_obs_bead,
+                        mode="savgol",
+                        window=summary_window,
+                        poly=summary_poly
+                    )
+                    test_transformed_bead = compute_transformed_signals(
+                        test_obs_bead,
+                        mode="savgol",
+                        window=summary_window,
+                        poly=summary_poly
+                    )
+
+                    # NEW: compute & store OK reference stats (per bead / per step / per signal / per transform)
+                    df_ok_ref = compute_ok_reference_stats(
+                        ref_transformed_bead,
+                        step_interval=global_step_interval,
+                        bead=bead,
+                        signal=signal_col,
+                        transform_mode="savgol",
+                        transform_params={"window": summary_window, "poly": summary_poly}
+                    )
+                    if not df_ok_ref.empty:
+                        all_ok_ref_rows.append(df_ok_ref)
+
+                    _, status_bead, metrics_bead = compute_step_normalization_and_flags(
+                        ref_transformed_bead,
+                        test_transformed_bead,
+                        step_interval=global_step_interval,
+                        norm_lower=global_norm_lower,
+                        norm_upper=global_norm_upper,
+                        z_lower=global_z_lower,
+                        z_upper=global_z_upper,
+                        title_suffix=f"(Bead #{bead}, Smoothed)"
+                    )
+
+                    for csv_name, status in status_bead.items():
+                        if status == "ok":
+                            continue
+                        m = metrics_bead.get(csv_name, {})
+                        rows.append({
+                            "CSV_File": csv_name,
+                            "Bead": bead,
+                            "Status": "LOW" if status == "low" else "HIGH",
+                            "Norm_Low_Exceed": m.get("Norm_Low_Exceed", np.nan),
+                            "Norm_High_Exceed": m.get("Norm_High_Exceed", np.nan),
+                            "Z_Low_Exceed": m.get("Z_Low_Exceed", np.nan),
+                            "Z_High_Exceed": m.get("Z_High_Exceed", np.nan),
+                        })
+
+                # NEW: download ALL-beads OK reference stats (smoothed defaults)
+                with st.expander("⬇️ Download OK reference stats CSV (ALL beads, Smoothed defaults)", expanded=False):
+                    if all_ok_ref_rows:
+                        df_all_ok_ref = pd.concat(all_ok_ref_rows, ignore_index=True)
+                        st.dataframe(df_all_ok_ref.head(50), use_container_width=True)
+                        st.download_button(
+                            label="Download OK reference stats (ALL beads) as CSV",
+                            data=csv_bytes_from_df(df_all_ok_ref),
+                            file_name=f"OK_reference_stats_ALLBEADS_{signal_col}_savgol_step{global_step_interval}.csv",
+                            mime="text/csv",
+                            use_container_width=True
+                        )
+                    else:
+                        st.info("No OK reference stats available to export (check segmentation / signal selection).")
+
+                if rows:
+                    df_summary = pd.DataFrame(rows)
+                    df_summary = df_summary.sort_values(["CSV_File", "Bead"]).reset_index(drop=True)
+                    df_summary["Is_NG"] = df_summary["CSV_File"].str.contains("NG", case=False)
+
+                    st.dataframe(df_summary, use_container_width=True)
+
+                    # Scatter summaries under the table
+                    df1 = df_summary[df_summary["Norm_Low_Exceed"].notna()]
+                    if not df1.empty:
+                        fig1 = go.Figure()
+                        colors1 = ["red" if is_ng else "grey" for is_ng in df1["Is_NG"]]
+                        fig1.add_trace(
+                            go.Scatter(
+                                x=df1["Bead"], y=df1["Norm_Low_Exceed"],
+                                mode="markers",
+                                marker=dict(size=8, color=colors1),
+                                text=df1["CSV_File"],
+                                hovertemplate="CSV: %{text}<br>Bead: %{x}<br>Norm_Low_Exceed: %{y}<extra></extra>"
+                            )
+                        )
+                        fig1.update_layout(title="Norm_Low_Exceed vs Bead", xaxis_title="Bead Number", yaxis_title="Norm_Low_Exceed")
+                        st.plotly_chart(fig1, use_container_width=True)
+
+                    df2 = df_summary[df_summary["Norm_High_Exceed"].notna()]
+                    if not df2.empty:
+                        fig2 = go.Figure()
+                        colors2 = ["red" if is_ng else "grey" for is_ng in df2["Is_NG"]]
+                        fig2.add_trace(
+                            go.Scatter(
+                                x=df2["Bead"], y=df2["Norm_High_Exceed"],
+                                mode="markers",
+                                marker=dict(size=8, color=colors2),
+                                text=df2["CSV_File"],
+                                hovertemplate="CSV: %{text}<br>Bead: %{x}<br>Norm_High_Exceed: %{y}<extra></extra>"
+                            )
+                        )
+                        fig2.update_layout(title="Norm_High_Exceed vs Bead", xaxis_title="Bead Number", yaxis_title="Norm_High_Exceed")
+                        st.plotly_chart(fig2, use_container_width=True)
+
+                    df3 = df_summary[df_summary["Z_Low_Exceed"].notna()]
+                    if not df3.empty:
+                        fig3 = go.Figure()
+                        colors3 = ["red" if is_ng else "grey" for is_ng in df3["Is_NG"]]
+                        fig3.add_trace(
+                            go.Scatter(
+                                x=df3["Bead"], y=df3["Z_Low_Exceed"],
+                                mode="markers",
+                                marker=dict(size=8, color=colors3),
+                                text=df3["CSV_File"],
+                                hovertemplate="CSV: %{text}<br>Bead: %{x}<br>Z_Low_Exceed: %{y}<extra></extra>"
+                            )
+                        )
+                        fig3.update_layout(title="Z_Low_Exceed vs Bead", xaxis_title="Bead Number", yaxis_title="Z_Low_Exceed")
+                        st.plotly_chart(fig3, use_container_width=True)
+
+                    df4 = df_summary[df_summary["Z_High_Exceed"].notna()]
+                    if not df4.empty:
+                        fig4 = go.Figure()
+                        colors4 = ["red" if is_ng else "grey" for is_ng in df4["Is_NG"]]
+                        fig4.add_trace(
+                            go.Scatter(
+                                x=df4["Bead"], y=df4["Z_High_Exceed"],
+                                mode="markers",
+                                marker=dict(size=8, color=colors4),
+                                text=df4["CSV_File"],
+                                hovertemplate="CSV: %{text}<br>Bead: %{x}<br>Z_High_Exceed: %{y}<extra></extra>"
+                            )
+                        )
+                        fig4.update_layout(title="Z_High_Exceed vs Bead", xaxis_title="Bead Number", yaxis_title="Z_High_Exceed")
+                        st.plotly_chart(fig4, use_container_width=True)
+                else:
+                    st.info("No suspected NOK beads found with current thresholds.")
+
+            # ------------ Build per-bead observations for detailed tabs ------------
             ref_observations = []
             for fname in ok_files:
                 beads = segmented_ok[fname]
                 if selected_bead in beads:
                     bead_df = beads[selected_bead]
                     if signal_col in bead_df.columns:
-                        ref_observations.append({"csv": fname, "data": bead_df[signal_col].reset_index(drop=True)})
+                        data = bead_df[signal_col].reset_index(drop=True)
+                        ref_observations.append({"csv": fname, "data": data})
 
             test_observations = []
             for fname in test_files:
@@ -666,8 +797,10 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                 if selected_bead in beads:
                     bead_df = beads[selected_bead]
                     if signal_col in bead_df.columns:
-                        test_observations.append({"csv": fname, "data": bead_df[signal_col].reset_index(drop=True)})
+                        data = bead_df[signal_col].reset_index(drop=True)
+                        test_observations.append({"csv": fname, "data": data})
 
+            # ------------ Tab 1: Raw Signal ------------
             with tabs[1]:
                 st.subheader("Raw Signal (Top) + Per-step Normalization (Bottom)")
                 if not ref_observations or not test_observations:
@@ -676,7 +809,29 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                     ref_transformed_raw = compute_transformed_signals(ref_observations, mode="raw")
                     test_transformed_raw = compute_transformed_signals(test_observations, mode="raw")
 
-                    fig_norm_raw, status_raw, _, ok_prev_raw = compute_step_normalization_and_flags(
+                    # NEW: OK reference export for this tab (bead/signal/transform/step)
+                    df_ok_ref_raw = compute_ok_reference_stats(
+                        ref_transformed_raw,
+                        step_interval=global_step_interval,
+                        bead=selected_bead,
+                        signal=signal_col,
+                        transform_mode="raw",
+                        transform_params={}
+                    )
+                    with st.expander("⬇️ Download OK reference stats CSV (THIS bead / THIS signal / RAW)", expanded=False):
+                        if not df_ok_ref_raw.empty:
+                            st.dataframe(df_ok_ref_raw.head(50), use_container_width=True)
+                            st.download_button(
+                                label="Download OK reference stats (RAW) as CSV",
+                                data=csv_bytes_from_df(df_ok_ref_raw),
+                                file_name=f"OK_reference_stats_bead{selected_bead}_{signal_col}_raw_step{global_step_interval}.csv",
+                                mime="text/csv",
+                                use_container_width=True
+                            )
+                        else:
+                            st.info("No OK reference stats to export for this selection.")
+
+                    fig_norm_raw, status_raw, _ = compute_step_normalization_and_flags(
                         ref_transformed_raw,
                         test_transformed_raw,
                         step_interval=global_step_interval,
@@ -684,39 +839,53 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         norm_upper=global_norm_upper,
                         z_lower=global_z_lower,
                         z_upper=global_z_upper,
-                        title_suffix=f"• Raw Signal {signal_col} • Bead #{selected_bead}",
-                        preview_steps=5,
-                        preview_mode="first"
+                        title_suffix=f"• Raw Signal {signal_col} • Bead #{selected_bead}"
                     )
-
                     if fig_norm_raw is not None:
                         plot_top_signals(
                             ref_transformed_raw,
                             test_transformed_raw,
                             status_raw,
-                            title=f"Raw Signal {signal_col} • Bead #{selected_bead} • "
-                                  f"Recipe: Norm[{global_norm_lower},{global_norm_upper}] "
-                                  f"Z-score[-{global_z_lower},{global_z_upper}] "
-                                  f"Step[{global_step_interval}]",
+                            title=f"Raw Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[-{global_z_lower},{global_z_upper}] Step[{global_step_interval}]",
                             y_label="Signal Value"
                         )
                         st.plotly_chart(fig_norm_raw, use_container_width=True)
 
-                        st.subheader("OK ok_step_meta preview (first 5 steps per OK CSV)")
-                        st.dataframe(ok_prev_raw, use_container_width=True)
-
+            # ------------ Tab 2: Smoothed (Savitzky) ------------
             with tabs[2]:
                 st.subheader("Smoothed Signal (Top) + Per-step Normalization (Bottom)")
                 if not ref_observations or not test_observations:
                     st.warning("No data for this bead in OK or TEST set.")
                 else:
-                    window = st.slider("Savitzky-Golay Window Length", 5, 101, 51, 10)
-                    poly = st.slider("Polynomial Order", 2, 5, 2, 1)
+                    window = st.slider("Savitzky-Golay Window Length", min_value=5, max_value=101, value=51, step=10)
+                    poly = st.slider("Polynomial Order", min_value=2, max_value=5, value=2, step=1)
 
                     ref_transformed_sg = compute_transformed_signals(ref_observations, mode="savgol", window=window, poly=poly)
                     test_transformed_sg = compute_transformed_signals(test_observations, mode="savgol", window=window, poly=poly)
 
-                    fig_norm_sg, status_sg, _, ok_prev_sg = compute_step_normalization_and_flags(
+                    # NEW: OK reference export for this tab
+                    df_ok_ref_sg = compute_ok_reference_stats(
+                        ref_transformed_sg,
+                        step_interval=global_step_interval,
+                        bead=selected_bead,
+                        signal=signal_col,
+                        transform_mode="savgol",
+                        transform_params={"window": window, "poly": poly}
+                    )
+                    with st.expander("⬇️ Download OK reference stats CSV (THIS bead / THIS signal / SMOOTHED)", expanded=False):
+                        if not df_ok_ref_sg.empty:
+                            st.dataframe(df_ok_ref_sg.head(50), use_container_width=True)
+                            st.download_button(
+                                label="Download OK reference stats (Smoothed) as CSV",
+                                data=csv_bytes_from_df(df_ok_ref_sg),
+                                file_name=f"OK_reference_stats_bead{selected_bead}_{signal_col}_savgol_w{window}_p{poly}_step{global_step_interval}.csv",
+                                mime="text/csv",
+                                use_container_width=True
+                            )
+                        else:
+                            st.info("No OK reference stats to export for this selection.")
+
+                    fig_norm_sg, status_sg, _ = compute_step_normalization_and_flags(
                         ref_transformed_sg,
                         test_transformed_sg,
                         step_interval=global_step_interval,
@@ -724,39 +893,53 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         norm_upper=global_norm_upper,
                         z_lower=global_z_lower,
                         z_upper=global_z_upper,
-                        title_suffix=f"• Smoothed Signal {signal_col} • Bead #{selected_bead}",
-                        preview_steps=5,
-                        preview_mode="first"
+                        title_suffix=f"• Smoothed Signal {signal_col} • Bead #{selected_bead}"
                     )
-
                     if fig_norm_sg is not None:
                         plot_top_signals(
                             ref_transformed_sg,
                             test_transformed_sg,
                             status_sg,
-                            title=f"Smoothed Signal {signal_col} • Bead #{selected_bead} • "
-                                  f"Recipe: Norm[{global_norm_lower},{global_norm_upper}] "
-                                  f"Z-score[-{global_z_lower},{global_z_upper}] "
-                                  f"Step[{global_step_interval}]",
+                            title=f"Smoothed Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[-{global_z_lower},{global_z_upper}] Step[{global_step_interval}]",
                             y_label="Signal Value"
                         )
                         st.plotly_chart(fig_norm_sg, use_container_width=True)
 
-                        st.subheader("OK ok_step_meta preview (first 5 steps per OK CSV)")
-                        st.dataframe(ok_prev_sg, use_container_width=True)
-
+            # ------------ Tab 3: Low-pass Filter ------------
             with tabs[3]:
                 st.subheader("Low-pass Filtered Signal (Top) + Per-step Normalization (Bottom)")
                 if not ref_observations or not test_observations:
                     st.warning("No data for this bead in OK or TEST set.")
                 else:
-                    cutoff = st.slider("Low-pass Cutoff Frequency (normalized, 0.01–0.5)", 0.01, 0.5, 0.1, 0.01)
-                    order = st.slider("Filter Order", 1, 5, 2, 1)
+                    cutoff = st.slider("Low-pass Cutoff Frequency (normalized, 0.01–0.5)", min_value=0.01, max_value=0.5, value=0.1, step=0.01)
+                    order = st.slider("Filter Order", min_value=1, max_value=5, value=2, step=1)
 
                     ref_transformed_lp = compute_transformed_signals(ref_observations, mode="lowpass", cutoff=cutoff, order=order)
                     test_transformed_lp = compute_transformed_signals(test_observations, mode="lowpass", cutoff=cutoff, order=order)
 
-                    fig_norm_lp, status_lp, _, ok_prev_lp = compute_step_normalization_and_flags(
+                    # NEW: OK reference export for this tab
+                    df_ok_ref_lp = compute_ok_reference_stats(
+                        ref_transformed_lp,
+                        step_interval=global_step_interval,
+                        bead=selected_bead,
+                        signal=signal_col,
+                        transform_mode="lowpass",
+                        transform_params={"cutoff": cutoff, "order": order}
+                    )
+                    with st.expander("⬇️ Download OK reference stats CSV (THIS bead / THIS signal / LOWPASS)", expanded=False):
+                        if not df_ok_ref_lp.empty:
+                            st.dataframe(df_ok_ref_lp.head(50), use_container_width=True)
+                            st.download_button(
+                                label="Download OK reference stats (Low-pass) as CSV",
+                                data=csv_bytes_from_df(df_ok_ref_lp),
+                                file_name=f"OK_reference_stats_bead{selected_bead}_{signal_col}_lowpass_c{cutoff}_o{order}_step{global_step_interval}.csv",
+                                mime="text/csv",
+                                use_container_width=True
+                            )
+                        else:
+                            st.info("No OK reference stats to export for this selection.")
+
+                    fig_norm_lp, status_lp, _ = compute_step_normalization_and_flags(
                         ref_transformed_lp,
                         test_transformed_lp,
                         step_interval=global_step_interval,
@@ -764,38 +947,52 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         norm_upper=global_norm_upper,
                         z_lower=global_z_lower,
                         z_upper=global_z_upper,
-                        title_suffix=f"• Low-pass Signal {signal_col} • Bead #{selected_bead}",
-                        preview_steps=5,
-                        preview_mode="first"
+                        title_suffix=f"• Low-pass Signal {signal_col} • Bead #{selected_bead}"
                     )
-
                     if fig_norm_lp is not None:
                         plot_top_signals(
                             ref_transformed_lp,
                             test_transformed_lp,
                             status_lp,
-                            title=f"Low-pass Filtered Signal {signal_col} • Bead #{selected_bead} • "
-                                  f"Recipe: Norm[{global_norm_lower},{global_norm_upper}] "
-                                  f"Z-score[-{global_z_lower},{global_z_upper}] "
-                                  f"Step[{global_step_interval}]",
+                            title=f"Low-pass Filtered Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[-{global_z_lower},{global_z_upper}] Step[{global_step_interval}]",
                             y_label="Signal Value"
                         )
                         st.plotly_chart(fig_norm_lp, use_container_width=True)
 
-                        st.subheader("OK ok_step_meta preview (first 5 steps per OK CSV)")
-                        st.dataframe(ok_prev_lp, use_container_width=True)
-
+            # ------------ Tab 4: Curve Fit ------------
             with tabs[4]:
                 st.subheader("Curve Fit Signal (Top) + Per-step Normalization (Bottom)")
                 if not ref_observations or not test_observations:
                     st.warning("No data for this bead in OK or TEST set.")
                 else:
-                    deg = st.slider("Curve Fit Polynomial Degree", 1, 100, 25, 1)
+                    deg = st.slider("Curve Fit Polynomial Degree", min_value=1, max_value=100, value=25, step=1)
 
                     ref_transformed_cf = compute_transformed_signals(ref_observations, mode="poly", deg=deg)
                     test_transformed_cf = compute_transformed_signals(test_observations, mode="poly", deg=deg)
 
-                    fig_norm_cf, status_cf, _, ok_prev_cf = compute_step_normalization_and_flags(
+                    # NEW: OK reference export for this tab
+                    df_ok_ref_cf = compute_ok_reference_stats(
+                        ref_transformed_cf,
+                        step_interval=global_step_interval,
+                        bead=selected_bead,
+                        signal=signal_col,
+                        transform_mode="poly",
+                        transform_params={"deg": deg}
+                    )
+                    with st.expander("⬇️ Download OK reference stats CSV (THIS bead / THIS signal / POLY FIT)", expanded=False):
+                        if not df_ok_ref_cf.empty:
+                            st.dataframe(df_ok_ref_cf.head(50), use_container_width=True)
+                            st.download_button(
+                                label="Download OK reference stats (Curve Fit) as CSV",
+                                data=csv_bytes_from_df(df_ok_ref_cf),
+                                file_name=f"OK_reference_stats_bead{selected_bead}_{signal_col}_poly_deg{deg}_step{global_step_interval}.csv",
+                                mime="text/csv",
+                                use_container_width=True
+                            )
+                        else:
+                            st.info("No OK reference stats to export for this selection.")
+
+                    fig_norm_cf, status_cf, _ = compute_step_normalization_and_flags(
                         ref_transformed_cf,
                         test_transformed_cf,
                         step_interval=global_step_interval,
@@ -803,23 +1000,14 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         norm_upper=global_norm_upper,
                         z_lower=global_z_lower,
                         z_upper=global_z_upper,
-                        title_suffix=f"• Curve Fit Signal {signal_col} • Bead #{selected_bead}",
-                        preview_steps=5,
-                        preview_mode="first"
+                        title_suffix=f"• Curve Fit Signal {signal_col} • Bead #{selected_bead}"
                     )
-
                     if fig_norm_cf is not None:
                         plot_top_signals(
                             ref_transformed_cf,
                             test_transformed_cf,
                             status_cf,
-                            title=f"Curve-fit Signal {signal_col} • Bead #{selected_bead} • "
-                                  f"Recipe: Norm[{global_norm_lower},{global_norm_upper}] "
-                                  f"Z-score[-{global_z_lower},{global_z_upper}] "
-                                  f"Step[{global_step_interval}]",
+                            title=f"Curve-fit Signal {signal_col} • Bead #{selected_bead} • Recipe: Norm[{global_norm_lower},{global_norm_upper}] Z-score[-{global_z_lower},{global_z_upper}] Step[{global_step_interval}]",
                             y_label="Signal Value"
                         )
                         st.plotly_chart(fig_norm_cf, use_container_width=True)
-
-                        st.subheader("OK ok_step_meta preview (first 5 steps per OK CSV)")
-                        st.dataframe(ok_prev_cf, use_container_width=True)

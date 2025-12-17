@@ -42,96 +42,6 @@ def short_label(csv_name: str) -> str:
     base = os.path.splitext(os.path.basename(csv_name))[0]
     return base[:6] if len(base) > 6 else base
 
-# ============================================================
-# NEW: severity scoring + transform picker for Summary tab
-# ============================================================
-def compute_severity_score(metrics, norm_lower, norm_upper, z_lower, z_upper):
-    """
-    metrics: dict with keys:
-      Norm_Low_Exceed, Norm_High_Exceed, Z_Low_Exceed, Z_High_Exceed
-    Returns a non-negative float; 0 means no exceedance.
-    Severity = max distance beyond each threshold (robust and simple).
-    """
-    if not metrics:
-        return 0.0
-
-    nl = metrics.get("Norm_Low_Exceed", np.nan)
-    nh = metrics.get("Norm_High_Exceed", np.nan)
-    zl = metrics.get("Z_Low_Exceed", np.nan)
-    zh = metrics.get("Z_High_Exceed", np.nan)
-
-    # distance beyond thresholds; if not exceeded -> 0
-    d_nl = (norm_lower - nl) if np.isfinite(nl) and nl < norm_lower else 0.0
-    d_nh = (nh - norm_upper) if np.isfinite(nh) and nh > norm_upper else 0.0
-    d_zl = ((-z_lower) - zl) if np.isfinite(zl) and zl < -z_lower else 0.0
-    d_zh = (zh - z_upper) if np.isfinite(zh) and zh > z_upper else 0.0
-
-    return float(max(d_nl, d_nh, d_zl, d_zh))
-
-def pick_worst_transform_for_summary(
-    ref_obs_bead,
-    test_obs_bead,
-    step_interval,
-    norm_lower,
-    norm_upper,
-    z_lower,
-    z_upper,
-    summary_window=51,
-    summary_poly=2,
-    summary_cutoff=0.1,
-    summary_order=2,
-    summary_deg=25,
-):
-    """
-    For each CSV in test_obs_bead, evaluate 4 transforms and pick the one
-    with the highest severity score. Returns:
-      worst_transform_map[csv] -> transform_label
-      worst_status_map[csv]    -> status ('ok'|'low'|'high')
-      worst_metrics_map[csv]   -> metrics dict (from worst transform)
-    """
-    transforms = [
-        ("Raw Signal", "raw", {}),
-        ("Smoothed (Savitzky)", "savgol", {"window": summary_window, "poly": summary_poly}),
-        ("Low-pass Filter", "lowpass", {"cutoff": summary_cutoff, "order": summary_order}),
-        ("Curve Fit", "poly", {"deg": summary_deg}),
-    ]
-
-    # Initialize per-csv best trackers
-    csv_names = [o["csv"] for o in test_obs_bead]
-    worst_transform_map = {c: None for c in csv_names}
-    worst_status_map = {c: "ok" for c in csv_names}
-    worst_metrics_map = {c: {} for c in csv_names}
-    worst_score_map = {c: -1.0 for c in csv_names}
-
-    for label, mode, params in transforms:
-        ref_t = compute_transformed_signals(ref_obs_bead, mode=mode, **params)
-        test_t = compute_transformed_signals(test_obs_bead, mode=mode, **params)
-
-        # We don't need the fig for summary
-        _, status_map, metrics_map = compute_step_normalization_and_flags(
-            ref_t,
-            test_t,
-            step_interval=step_interval,
-            norm_lower=norm_lower,
-            norm_upper=norm_upper,
-            z_lower=z_lower,
-            z_upper=z_upper,
-            title_suffix=f"(Summary • {label})"
-        )
-
-        for csv, stt in status_map.items():
-            m = metrics_map.get(csv, {})
-            score = compute_severity_score(m, norm_lower, norm_upper, z_lower, z_upper)
-
-            # Choose highest severity; tie-breaker: prefer LOW/HIGH over OK
-            if score > worst_score_map[csv]:
-                worst_score_map[csv] = score
-                worst_transform_map[csv] = label
-                worst_status_map[csv] = stt
-                worst_metrics_map[csv] = m
-
-    return worst_transform_map, worst_status_map, worst_metrics_map
-
 # --- Session State ---
 if "segmented_ok" not in st.session_state:
     st.session_state.segmented_ok = None
@@ -303,6 +213,7 @@ def compute_step_normalization_and_flags(
     - Norm band            = per-step min/max of OK data
     - Z-score              = (TEST - median) / std
     """
+
     if len(ref_obs) == 0:
         st.warning("No OK reference signals available for normalization.")
         return None, {}, {}
@@ -363,11 +274,14 @@ def compute_step_normalization_and_flags(
     ok_matrix = np.vstack([arr[:min_steps] for arr in ok_step_arrays])  # shape (K, S)
 
     # ---- OK statistics per step ----
+    # Center: median (robust to outliers)
     mu = np.median(ok_matrix, axis=0)
 
+    # Spread: standard deviation (keeps your original behavior)
     sigma = ok_matrix.std(axis=0, ddof=1)
     sigma[sigma < 1e-12] = 1e-12  # avoid division by zero
 
+    # Norm band: plain min/max from OK data
     min_ok = ok_matrix.min(axis=0)
     max_ok = ok_matrix.max(axis=0)
     denom = max_ok - min_ok
@@ -426,25 +340,29 @@ def compute_step_normalization_and_flags(
         norm_vals = (step_y - min_ok) / denom
         z_vals = (step_y - mu) / sigma
 
+        # Masks for threshold violations
         mask_norm_low = norm_vals < norm_lower
         mask_norm_high = norm_vals > norm_upper
         mask_z_low = z_vals < -z_lower
         mask_z_high = z_vals > z_upper
 
+        # Exceeding values (NaN if no violation)
         norm_low_exceed = norm_vals[mask_norm_low].min() if mask_norm_low.any() else np.nan
         norm_high_exceed = norm_vals[mask_norm_high].max() if mask_norm_high.any() else np.nan
         z_low_exceed = z_vals[mask_z_low].min() if mask_z_low.any() else np.nan
         z_high_exceed = z_vals[mask_z_high].max() if mask_z_high.any() else np.nan
 
+        # Low deviation (drop) condition
         low_flag = mask_norm_low.any() or mask_z_low.any()
+        # High deviation (too high) condition
         high_flag = mask_norm_high.any() or mask_z_high.any()
 
         if low_flag:
-            status = "low"
+            status = "low"      # red
         elif high_flag:
-            status = "high"
+            status = "high"     # orange
         else:
-            status = "ok"
+            status = "ok"       # green
 
         status_map[csv_name] = status
         metrics_map[csv_name] = {
@@ -466,6 +384,7 @@ def compute_step_normalization_and_flags(
 
         name = short_label(csv_name)
 
+        # Left: 0–1 normalization (TEST)
         fig.add_trace(
             go.Scatter(
                 x=step_indices,
@@ -480,6 +399,7 @@ def compute_step_normalization_and_flags(
             col=1
         )
 
+        # Right: z-score (TEST)
         fig.add_trace(
             go.Scatter(
                 x=step_indices,
@@ -493,10 +413,31 @@ def compute_step_normalization_and_flags(
             col=2
         )
 
-    fig.add_hline(y=norm_lower, line=dict(color="gray", dash="dash"), row=1, col=1)
-    fig.add_hline(y=norm_upper, line=dict(color="gray", dash="dash"), row=1, col=1)
-    fig.add_hline(y=-z_lower, line=dict(color="gray", dash="dash"), row=1, col=2)
-    fig.add_hline(y=z_upper, line=dict(color="gray", dash="dash"), row=1, col=2)
+    # Threshold lines
+    fig.add_hline(
+        y=norm_lower,
+        line=dict(color="gray", dash="dash"),
+        row=1,
+        col=1
+    )
+    fig.add_hline(
+        y=norm_upper,
+        line=dict(color="gray", dash="dash"),
+        row=1,
+        col=1
+    )
+    fig.add_hline(
+        y=-z_lower,
+        line=dict(color="gray", dash="dash"),
+        row=1,
+        col=2
+    )
+    fig.add_hline(
+        y=z_upper,
+        line=dict(color="gray", dash="dash"),
+        row=1,
+        col=2
+    )
 
     fig.update_xaxes(title_text="Step Index", row=1, col=1)
     fig.update_yaxes(title_text="Normalized Value", row=1, col=1)
@@ -504,11 +445,91 @@ def compute_step_normalization_and_flags(
     fig.update_yaxes(title_text="Z-score", row=1, col=2)
 
     fig.update_layout(
-        title=dict(text=f"Per-step Normalization {title_suffix}", font=dict(size=22)),
+        title=dict(
+            text=f"Per-step Normalization {title_suffix}",
+            font=dict(size=22)
+        ),
         legend=dict(orientation="h")
     )
 
     return fig, status_map, metrics_map
+
+# ============================================================
+# NEW: SignalTransform identification for Summary
+# ============================================================
+TRANSFORMS_FOR_SUMMARY = [
+    ("Raw Signal", "raw", {}),
+    ("Smoothed (Savitzky)", "savgol", {"window": 51, "poly": 2}),
+    ("Low-pass Filter", "lowpass", {"cutoff": 0.1, "order": 2}),
+    ("Curve Fit", "poly", {"deg": 25}),
+]
+
+def compute_severity_score_from_metrics(m, norm_lower, norm_upper, z_lower, z_upper):
+    """
+    m keys: Norm_Low_Exceed, Norm_High_Exceed, Z_Low_Exceed, Z_High_Exceed
+    Severity = max distance beyond thresholds among the 4 metrics.
+    """
+    if not m:
+        return 0.0
+
+    nl = m.get("Norm_Low_Exceed", np.nan)
+    nh = m.get("Norm_High_Exceed", np.nan)
+    zl = m.get("Z_Low_Exceed", np.nan)
+    zh = m.get("Z_High_Exceed", np.nan)
+
+    d_nl = (norm_lower - nl) if np.isfinite(nl) and nl < norm_lower else 0.0
+    d_nh = (nh - norm_upper) if np.isfinite(nh) and nh > norm_upper else 0.0
+    d_zl = ((-z_lower) - zl) if np.isfinite(zl) and zl < -z_lower else 0.0
+    d_zh = (zh - z_upper) if np.isfinite(zh) and zh > z_upper else 0.0
+
+    return float(max(d_nl, d_nh, d_zl, d_zh))
+
+def pick_worst_transform_for_bead(
+    ref_obs_bead,
+    test_obs_bead,
+    step_interval,
+    norm_lower,
+    norm_upper,
+    z_lower,
+    z_upper,
+):
+    """
+    For one bead: evaluate 4 transforms and pick the transform with worst severity per TEST csv.
+    Returns dicts keyed by csv:
+      worst_tf[csv], worst_status[csv], worst_metrics[csv]
+    """
+    csv_list = [o["csv"] for o in test_obs_bead]
+
+    worst_tf = {c: None for c in csv_list}
+    worst_status = {c: "ok" for c in csv_list}
+    worst_metrics = {c: {} for c in csv_list}
+    worst_score = {c: -1.0 for c in csv_list}
+
+    for tf_label, tf_mode, tf_params in TRANSFORMS_FOR_SUMMARY:
+        ref_t = compute_transformed_signals(ref_obs_bead, mode=tf_mode, **tf_params)
+        test_t = compute_transformed_signals(test_obs_bead, mode=tf_mode, **tf_params)
+
+        _, status_map, metrics_map = compute_step_normalization_and_flags(
+            ref_t,
+            test_t,
+            step_interval=step_interval,
+            norm_lower=norm_lower,
+            norm_upper=norm_upper,
+            z_lower=z_lower,
+            z_upper=z_upper,
+            title_suffix=f"(Bead #{ref_obs_bead[0].get('bead','?')}, {tf_label})" if ref_obs_bead else f"({tf_label})"
+        )
+
+        for csv in status_map.keys():
+            m = metrics_map.get(csv, {})
+            score = compute_severity_score_from_metrics(m, norm_lower, norm_upper, z_lower, z_upper)
+            if score > worst_score[csv]:
+                worst_score[csv] = score
+                worst_tf[csv] = tf_label
+                worst_status[csv] = status_map[csv]
+                worst_metrics[csv] = m
+
+    return worst_tf, worst_status, worst_metrics
 
 # ============================================================
 # Helper: Plot Top (Transformed TEST + OK in gray)
@@ -516,6 +537,7 @@ def compute_step_normalization_and_flags(
 def plot_top_signals(ref_transformed, test_transformed, status_map, title, y_label):
     fig = go.Figure()
 
+    # OK reference signals in gray
     for obs in ref_transformed:
         y = obs["transformed"]
         x = np.arange(len(y))
@@ -530,6 +552,7 @@ def plot_top_signals(ref_transformed, test_transformed, status_map, title, y_lab
             )
         )
 
+    # TEST signals, colored by status
     for obs in test_transformed:
         y = obs["transformed"]
         x = np.arange(len(y))
@@ -580,6 +603,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
 
     st.sidebar.header("Step 3: Global Thresholds & Step Interval")
 
+    # Global thresholds for all tabs (using your tuned defaults)
     global_norm_lower = st.sidebar.number_input(
         "Global Lower Threshold for 0–1 Normalization (flag LOW if below)",
         min_value=-5.0,
@@ -609,6 +633,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
         step=0.25
     )
 
+    # Global step interval
     global_step_interval = st.sidebar.slider(
         "Global Step Interval (points)",
         min_value=10,
@@ -622,6 +647,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
     ok_files = sorted(segmented_ok.keys())
     test_files = sorted(segmented_test.keys())
 
+    # Bead options = intersection of beads present in OK and TEST
     bead_ok = set()
     for fname, beads in segmented_ok.items():
         bead_ok.update(beads.keys())
@@ -635,6 +661,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
     else:
         selected_bead = st.sidebar.selectbox("Select Bead Number", bead_options)
 
+        # Example OK bead df to list signal columns
         example_bead_df = None
         for fname in ok_files:
             beads = segmented_ok[fname]
@@ -666,18 +693,12 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
 
             # ------------ Tab 0: Global Summary (All Beads) ------------
             with tabs[0]:
-                st.subheader("Global Summary of Suspected NOK (All Beads, Worst-Transform Basis)")
+                st.subheader("Global Summary of Suspected NOK (All Beads)")
 
                 rows = []
 
-                # fixed defaults for summary transforms
-                summary_window = 51
-                summary_poly = 2
-                summary_cutoff = 0.1
-                summary_order = 2
-                summary_deg = 25
-
                 for bead in bead_options:
+                    # Build OK & TEST obs for this bead
                     ref_obs_bead = []
                     for fname in ok_files:
                         beads = segmented_ok[fname]
@@ -699,19 +720,15 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                     if not ref_obs_bead or not test_obs_bead:
                         continue
 
-                    worst_tf, worst_status, worst_metrics = pick_worst_transform_for_summary(
+                    # NEW: pick worst transform for each csv at this bead
+                    worst_tf, worst_status, worst_metrics = pick_worst_transform_for_bead(
                         ref_obs_bead=ref_obs_bead,
                         test_obs_bead=test_obs_bead,
                         step_interval=global_step_interval,
                         norm_lower=global_norm_lower,
                         norm_upper=global_norm_upper,
                         z_lower=global_z_lower,
-                        z_upper=global_z_upper,
-                        summary_window=summary_window,
-                        summary_poly=summary_poly,
-                        summary_cutoff=summary_cutoff,
-                        summary_order=summary_order,
-                        summary_deg=summary_deg,
+                        z_upper=global_z_upper
                     )
 
                     for csv_name, status in worst_status.items():
@@ -719,7 +736,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                             continue
                         m = worst_metrics.get(csv_name, {})
                         rows.append({
-                            "CSV_File": csv_name,
+                            "CSV_File": csv_name,              # full name
                             "Bead": bead,
                             "Status": "LOW" if status == "low" else "HIGH",
                             "SignalTransform": worst_tf.get(csv_name, None),
@@ -733,11 +750,17 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                     df_summary = pd.DataFrame(rows)
                     df_summary = df_summary.sort_values(["CSV_File", "Bead"]).reset_index(drop=True)
 
+                    # Mark which rows are true NOKs based on file name containing "NG"
                     df_summary["Is_NG"] = df_summary["CSV_File"].str.contains("NG", case=False)
 
                     st.dataframe(df_summary, use_container_width=True)
 
                     # ---- Scatter summaries under the table ----
+                    # Color rule:
+                    # - CSV_File name contains "NG"  -> Correct NOK detection  -> red
+                    # - CSV_File name does NOT have "NG" -> Over-detected NOK  -> black
+
+                    # 1) Norm_Low_Exceed vs Bead
                     df1 = df_summary[df_summary["Norm_Low_Exceed"].notna()]
                     if not df1.empty:
                         fig1 = go.Figure()
@@ -752,6 +775,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 hovertemplate="CSV: %{text}<br>Bead: %{x}<br>Norm_Low_Exceed: %{y}<extra></extra>"
                             )
                         )
+
                         fig1.update_layout(
                             title="Norm_Low_Exceed vs Bead",
                             xaxis_title="Bead Number",
@@ -759,6 +783,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         )
                         st.plotly_chart(fig1, use_container_width=True)
 
+                    # 2) Norm_High_Exceed vs Bead
                     df2 = df_summary[df_summary["Norm_High_Exceed"].notna()]
                     if not df2.empty:
                         fig2 = go.Figure()
@@ -773,6 +798,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 hovertemplate="CSV: %{text}<br>Bead: %{x}<br>Norm_High_Exceed: %{y}<extra></extra>"
                             )
                         )
+
                         fig2.update_layout(
                             title="Norm_High_Exceed vs Bead",
                             xaxis_title="Bead Number",
@@ -780,6 +806,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         )
                         st.plotly_chart(fig2, use_container_width=True)
 
+                    # 3) Z_Low_Exceed vs Bead
                     df3 = df_summary[df_summary["Z_Low_Exceed"].notna()]
                     if not df3.empty:
                         fig3 = go.Figure()
@@ -794,6 +821,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 hovertemplate="CSV: %{text}<br>Bead: %{x}<br>Z_Low_Exceed: %{y}<extra></extra>"
                             )
                         )
+
                         fig3.update_layout(
                             title="Z_Low_Exceed vs Bead",
                             xaxis_title="Bead Number",
@@ -801,6 +829,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         )
                         st.plotly_chart(fig3, use_container_width=True)
 
+                    # 4) Z_High_Exceed vs Bead
                     df4 = df_summary[df_summary["Z_High_Exceed"].notna()]
                     if not df4.empty:
                         fig4 = go.Figure()
@@ -815,6 +844,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 hovertemplate="CSV: %{text}<br>Bead: %{x}<br>Z_High_Exceed: %{y}<extra></extra>"
                             )
                         )
+
                         fig4.update_layout(
                             title="Z_High_Exceed vs Bead",
                             xaxis_title="Bead Number",
@@ -826,6 +856,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                     st.info("No suspected NOK beads found with current thresholds.")
 
             # ------------ Build per-bead observations for detailed tabs ------------
+            # For the selected bead only:
             ref_observations = []
             for fname in ok_files:
                 beads = segmented_ok[fname]
@@ -833,7 +864,10 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                     bead_df = beads[selected_bead]
                     if signal_col in bead_df.columns:
                         data = bead_df[signal_col].reset_index(drop=True)
-                        ref_observations.append({"csv": fname, "data": data})
+                        ref_observations.append({
+                            "csv": fname,
+                            "data": data
+                        })
 
             test_observations = []
             for fname in test_files:
@@ -842,7 +876,10 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                     bead_df = beads[selected_bead]
                     if signal_col in bead_df.columns:
                         data = bead_df[signal_col].reset_index(drop=True)
-                        test_observations.append({"csv": fname, "data": data})
+                        test_observations.append({
+                            "csv": fname,
+                            "data": data
+                        })
 
             # ------------ Tab 1: Raw Signal ------------
             with tabs[1]:
@@ -850,8 +887,12 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                 if not ref_observations or not test_observations:
                     st.warning("No data for this bead in OK or TEST set.")
                 else:
-                    ref_transformed_raw = compute_transformed_signals(ref_observations, mode="raw")
-                    test_transformed_raw = compute_transformed_signals(test_observations, mode="raw")
+                    ref_transformed_raw = compute_transformed_signals(
+                        ref_observations, mode="raw"
+                    )
+                    test_transformed_raw = compute_transformed_signals(
+                        test_observations, mode="raw"
+                    )
 
                     fig_norm_raw, status_raw, _ = compute_step_normalization_and_flags(
                         ref_transformed_raw,
@@ -894,8 +935,18 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         step=1
                     )
 
-                    ref_transformed_sg = compute_transformed_signals(ref_observations, mode="savgol", window=window, poly=poly)
-                    test_transformed_sg = compute_transformed_signals(test_observations, mode="savgol", window=window, poly=poly)
+                    ref_transformed_sg = compute_transformed_signals(
+                        ref_observations,
+                        mode="savgol",
+                        window=window,
+                        poly=poly
+                    )
+                    test_transformed_sg = compute_transformed_signals(
+                        test_observations,
+                        mode="savgol",
+                        window=window,
+                        poly=poly
+                    )
 
                     fig_norm_sg, status_sg, _ = compute_step_normalization_and_flags(
                         ref_transformed_sg,
@@ -938,8 +989,18 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         step=1
                     )
 
-                    ref_transformed_lp = compute_transformed_signals(ref_observations, mode="lowpass", cutoff=cutoff, order=order)
-                    test_transformed_lp = compute_transformed_signals(test_observations, mode="lowpass", cutoff=cutoff, order=order)
+                    ref_transformed_lp = compute_transformed_signals(
+                        ref_observations,
+                        mode="lowpass",
+                        cutoff=cutoff,
+                        order=order
+                    )
+                    test_transformed_lp = compute_transformed_signals(
+                        test_observations,
+                        mode="lowpass",
+                        cutoff=cutoff,
+                        order=order
+                    )
 
                     fig_norm_lp, status_lp, _ = compute_step_normalization_and_flags(
                         ref_transformed_lp,
@@ -975,8 +1036,16 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         step=1
                     )
 
-                    ref_transformed_cf = compute_transformed_signals(ref_observations, mode="poly", deg=deg)
-                    test_transformed_cf = compute_transformed_signals(test_observations, mode="poly", deg=deg)
+                    ref_transformed_cf = compute_transformed_signals(
+                        ref_observations,
+                        mode="poly",
+                        deg=deg
+                    )
+                    test_transformed_cf = compute_transformed_signals(
+                        test_observations,
+                        mode="poly",
+                        deg=deg
+                    )
 
                     fig_norm_cf, status_cf, _ = compute_step_normalization_and_flags(
                         ref_transformed_cf,

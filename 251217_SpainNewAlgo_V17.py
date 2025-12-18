@@ -593,7 +593,8 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         if len(channel_cols) < 2:
                             continue
 
-                        for ch_idx, ch_col in enumerate(channel_cols, start=1):
+                        # for ch_idx, ch_col in enumerate(channel_cols, start=1):
+                        for ch_idx, ch_col in enumerate(channel_cols):  # 0, 1    
                             ref_obs_bead = []
                             for fname in ok_files:
                                 beads = segmented_ok[fname]
@@ -629,10 +630,21 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 if status == "ok":
                                     continue
                                 m = worst_metrics.get(csv_name, {})
+                                # rows.append({
+                                #     "CSV_File": csv_name,
+                                #     "Bead": bead,
+                                #     "Channel": f"Channel {ch_idx}",
+                                #     "Status": "LOW" if status == "low" else "HIGH",
+                                #     "SignalTransform": worst_tf.get(csv_name, None),
+                                #     "Norm_Low_Exceed": m.get("Norm_Low_Exceed", np.nan),
+                                #     "Norm_High_Exceed": m.get("Norm_High_Exceed", np.nan),
+                                #     "Z_Low_Exceed": m.get("Z_Low_Exceed", np.nan),
+                                #     "Z_High_Exceed": m.get("Z_High_Exceed", np.nan),
+                                # })
                                 rows.append({
                                     "CSV_File": csv_name,
                                     "Bead": bead,
-                                    "Channel": f"Channel {ch_idx}",
+                                    "Channel": ch_idx,  # int: 0 or 1
                                     "Status": "LOW" if status == "low" else "HIGH",
                                     "SignalTransform": worst_tf.get(csv_name, None),
                                     "Norm_Low_Exceed": m.get("Norm_Low_Exceed", np.nan),
@@ -641,6 +653,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                     "Z_High_Exceed": m.get("Z_High_Exceed", np.nan),
                                 })
 
+                
                 if rows:
                     df_summary = pd.DataFrame(rows)
                     df_summary = df_summary.sort_values(["CSV_File", "Bead", "Channel"]).reset_index(drop=True)

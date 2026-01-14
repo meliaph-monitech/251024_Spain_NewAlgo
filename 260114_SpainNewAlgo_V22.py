@@ -417,12 +417,13 @@ def plot_global_metric_scatter(df_summary: pd.DataFrame, metric_col: str, title:
                 mode="markers",
                 name=f"Channel {int(ch)}",
                 marker=dict(size=8, color=color_map.get(int(ch), "#888888"), opacity=0.85),
+                # IMPORTANT: escape Plotly placeholders inside f-string using double braces
                 hovertemplate=(
                     "CSV: %{customdata[0]}<br>"
-                    "Bead: %{x}<br>"
+                    "Bead: %{{x}}<br>"
                     "Channel: %{customdata[1]}<br>"
                     "Status: %{customdata[2]}<br>"
-                    f"{metric_col}: %{y}<extra></extra>"
+                    f"{metric_col}: %{{y}}<extra></extra>"
                 ),
                 customdata=np.stack(
                     [
@@ -512,7 +513,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                 tabs = st.tabs(["Summary", "DataViz"])
 
                 # ============================================================
-                # Tab 0: Summary (table + NEW global scatter plots)
+                # Tab 0: Summary (table + global scatter plots)
                 # ============================================================
                 with tabs[0]:
                     st.subheader("Global Summary of Suspected NOK (All Beads, Both Channels, Raw Only)")
@@ -592,7 +593,6 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         ).reset_index(drop=True)
                         df_summary["Is_NG"] = df_summary["CSV_File"].str.contains("NG", case=False)
 
-                        # --- NEW: Global scatter plots for the 4 metrics ---
                         st.markdown("### Global Severity Scatter (NOK-only dots)")
                         c1, c2 = st.columns(2)
                         with c1:
@@ -656,7 +656,6 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
 
                         return ref_obs, test_obs
 
-                    # -------- Expander: Channel 0 --------
                     with st.expander("Channel 0", expanded=True):
                         ref_obs, test_obs = build_observations_for_channel_index(0)
                         if not ref_obs or not test_obs:
@@ -686,7 +685,6 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 )
                                 st.plotly_chart(fig_norm, use_container_width=True)
 
-                    # -------- Expander: Channel 1 --------
                     with st.expander("Channel 1", expanded=False):
                         ref_obs, test_obs = build_observations_for_channel_index(1)
                         if not ref_obs or not test_obs:

@@ -398,18 +398,48 @@ def plot_global_metric_scatter(df_summary: pd.DataFrame, metric_col: str, title:
         st.info(f"No data to plot for {metric_col}.")
         return
 
+    # keep only finite y
+    y_arr = pd.to_numeric(df_summary[metric_col], errors="coerce")
     dfp = df_summary.copy()
+    dfp[metric_col] = y_arr
     dfp = dfp[np.isfinite(dfp[metric_col].to_numpy(dtype=float, na_value=np.nan))]
+
     if dfp.empty:
         st.info(f"No non-NaN values to plot for {metric_col}.")
         return
 
-    color_map = {0: "#1f77b4", 1: "#ff7f0e"}  # 2 colors only
+    # ensure bead is numeric for x-axis
+    dfp["Bead"] = pd.to_numeric(dfp["Bead"], errors="coerce")
+    dfp = dfp[np.isfinite(dfp["Bead"].to_numpy(dtype=float, na_value=np.nan))]
+    if dfp.empty:
+        st.info(f"No valid bead numbers to plot for {metric_col}.")
+        return
+
+    color_map = {0: "#1f77b4", 1: "#ff7f0e"}  # only 2 colors
 
     fig = go.Figure()
 
     for ch in sorted(dfp["Channel"].unique()):
         dch = dfp[dfp["Channel"] == ch]
+
+        # customdata: CSV, Channel, Status
+        custom = np.stack(
+            [
+                dch["CSV_File"].astype(str).to_numpy(),
+                dch["Channel"].astype(int).to_numpy(),
+                dch["Status"].astype(str).to_numpy(),
+            ],
+            axis=1
+        )
+
+        hovertemplate = (
+            "CSV: %{customdata[0]}<br>"
+            "Bead: %{x}<br>"
+            "Channel: %{customdata[1]}<br>"
+            "Status: %{customdata[2]}<br>"
+            + metric_col + ": %{y}<extra></extra>"
+        )
+
         fig.add_trace(
             go.Scatter(
                 x=dch["Bead"],
@@ -417,22 +447,8 @@ def plot_global_metric_scatter(df_summary: pd.DataFrame, metric_col: str, title:
                 mode="markers",
                 name=f"Channel {int(ch)}",
                 marker=dict(size=8, color=color_map.get(int(ch), "#888888"), opacity=0.85),
-                # IMPORTANT: escape Plotly placeholders inside f-string using double braces
-                hovertemplate=(
-                    "CSV: %{customdata[0]}<br>"
-                    "Bead: %{{x}}<br>"
-                    "Channel: %{customdata[1]}<br>"
-                    "Status: %{customdata[2]}<br>"
-                    f"{metric_col}: %{{y}}<extra></extra>"
-                ),
-                customdata=np.stack(
-                    [
-                        dch["CSV_File"].astype(str).to_numpy(),
-                        dch["Channel"].astype(int).to_numpy(),
-                        dch["Status"].astype(str).to_numpy(),
-                    ],
-                    axis=1
-                ),
+                customdata=custom,
+                hovertemplate=hovertemplate,
             )
         )
 
@@ -513,7 +529,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                 tabs = st.tabs(["Summary", "DataViz"])
 
                 # ============================================================
-                # Tab 0: Summary (table + global scatter plots)
+                # Tab 0: Summary (table first, then stacked scatter plots)
                 # ============================================================
                 with tabs[0]:
                     st.subheader("Global Summary of Suspected NOK (All Beads, Both Channels, Raw Only)")
@@ -593,37 +609,30 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         ).reset_index(drop=True)
                         df_summary["Is_NG"] = df_summary["CSV_File"].str.contains("NG", case=False)
 
-                        st.markdown("### Global Severity Scatter (NOK-only dots)")
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            plot_global_metric_scatter(
-                                df_summary,
-                                "Norm_Low_Exceed",
-                                "Norm_Low_Exceed vs Bead (color = Channel)"
-                            )
-                        with c2:
-                            plot_global_metric_scatter(
-                                df_summary,
-                                "Norm_High_Exceed",
-                                "Norm_High_Exceed vs Bead (color = Channel)"
-                            )
-
-                        c3, c4 = st.columns(2)
-                        with c3:
-                            plot_global_metric_scatter(
-                                df_summary,
-                                "Z_Low_Exceed",
-                                "Z_Low_Exceed vs Bead (color = Channel)"
-                            )
-                        with c4:
-                            plot_global_metric_scatter(
-                                df_summary,
-                                "Z_High_Exceed",
-                                "Z_High_Exceed vs Bead (color = Channel)"
-                            )
-
                         st.markdown("### Suspected NOK Table")
                         st.dataframe(df_summary, use_container_width=True)
+
+                        st.markdown("### Global Severity Scatter (NOK-only dots)")
+                        plot_global_metric_scatter(
+                            df_summary,
+                            "Norm_Low_Exceed",
+                            "Norm_Low_Exceed vs Bead (color = Channel)"
+                        )
+                        plot_global_metric_scatter(
+                            df_summary,
+                            "Norm_High_Exceed",
+                            "Norm_High_Exceed vs Bead (color = Channel)"
+                        )
+                        plot_global_metric_scatter(
+                            df_summary,
+                            "Z_Low_Exceed",
+                            "Z_Low_Exceed vs Bead (color = Channel)"
+                        )
+                        plot_global_metric_scatter(
+                            df_summary,
+                            "Z_High_Exceed",
+                            "Z_High_Exceed vs Bead (color = Channel)"
+                        )
                     else:
                         st.info("No suspected NOK beads found with current thresholds (both channels, raw only).")
 

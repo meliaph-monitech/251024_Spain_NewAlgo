@@ -43,8 +43,8 @@ def short_label(csv_name: str) -> str:
 
 def get_channel_columns(bead_df: pd.DataFrame):
     """
-    No hard-coding: Channel index 0 and 1 are interpreted as
-    the first and second columns in the bead dataframe.
+    No hard-coding: the first and second columns in the bead dataframe
+    are treated as the two signal channels.
     """
     cols = bead_df.columns.tolist()
     if len(cols) < 2:
@@ -391,43 +391,39 @@ def plot_global_metric_scatter(df_summary: pd.DataFrame, metric_col: str, title:
     """
     X: Bead number
     Y: metric_col value
-    Points: each flagged NOK row (CSV_File, Bead, Channel)
-    Color: Channel (only 2 colors)
+    Points: each flagged NOK row (CSV_File, Bead, ColumnName)
+    Color: ColumnName (two columns only)
     """
     if df_summary is None or df_summary.empty or metric_col not in df_summary.columns:
         st.info(f"No data to plot for {metric_col}.")
         return
 
-    # keep only finite y
-    y_arr = pd.to_numeric(df_summary[metric_col], errors="coerce")
     dfp = df_summary.copy()
-    dfp[metric_col] = y_arr
+    dfp[metric_col] = pd.to_numeric(dfp[metric_col], errors="coerce")
+    dfp["Bead"] = pd.to_numeric(dfp["Bead"], errors="coerce")
+
+    dfp = dfp[np.isfinite(dfp["Bead"].to_numpy(dtype=float, na_value=np.nan))]
     dfp = dfp[np.isfinite(dfp[metric_col].to_numpy(dtype=float, na_value=np.nan))]
 
     if dfp.empty:
-        st.info(f"No non-NaN values to plot for {metric_col}.")
+        st.info(f"No valid values to plot for {metric_col}.")
         return
 
-    # ensure bead is numeric for x-axis
-    dfp["Bead"] = pd.to_numeric(dfp["Bead"], errors="coerce")
-    dfp = dfp[np.isfinite(dfp["Bead"].to_numpy(dtype=float, na_value=np.nan))]
-    if dfp.empty:
-        st.info(f"No valid bead numbers to plot for {metric_col}.")
-        return
-
-    color_map = {0: "#1f77b4", 1: "#ff7f0e"}  # only 2 colors
+    # 2 colors only (one per column name)
+    col_names = sorted(dfp["SignalColumn"].astype(str).unique())
+    palette = ["#1f77b4", "#ff7f0e"]
+    color_map = {name: palette[i % len(palette)] for i, name in enumerate(col_names)}
 
     fig = go.Figure()
 
-    for ch in sorted(dfp["Channel"].unique()):
-        dch = dfp[dfp["Channel"] == ch]
+    for col_name in col_names:
+        dcol = dfp[dfp["SignalColumn"].astype(str) == col_name]
 
-        # customdata: CSV, Channel, Status
         custom = np.stack(
             [
-                dch["CSV_File"].astype(str).to_numpy(),
-                dch["Channel"].astype(int).to_numpy(),
-                dch["Status"].astype(str).to_numpy(),
+                dcol["CSV_File"].astype(str).to_numpy(),
+                dcol["SignalColumn"].astype(str).to_numpy(),
+                dcol["Status"].astype(str).to_numpy(),
             ],
             axis=1
         )
@@ -435,18 +431,18 @@ def plot_global_metric_scatter(df_summary: pd.DataFrame, metric_col: str, title:
         hovertemplate = (
             "CSV: %{customdata[0]}<br>"
             "Bead: %{x}<br>"
-            "Channel: %{customdata[1]}<br>"
+            "Column: %{customdata[1]}<br>"
             "Status: %{customdata[2]}<br>"
             + metric_col + ": %{y}<extra></extra>"
         )
 
         fig.add_trace(
             go.Scatter(
-                x=dch["Bead"],
-                y=dch[metric_col],
+                x=dcol["Bead"],
+                y=dcol[metric_col],
                 mode="markers",
-                name=f"Channel {int(ch)}",
-                marker=dict(size=8, color=color_map.get(int(ch), "#888888"), opacity=0.85),
+                name=str(col_name),
+                marker=dict(size=8, color=color_map.get(col_name, "#888888"), opacity=0.85),
                 customdata=custom,
                 hovertemplate=hovertemplate,
             )
@@ -511,7 +507,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
     else:
         selected_bead = st.sidebar.selectbox("Select Bead Number", bead_options)
 
-        # Infer channel columns from an example bead df
+        # Infer the first two columns from an example bead df
         example_bead_df = None
         for fname in ok_files:
             beads = segmented_ok[fname]
@@ -524,7 +520,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
         else:
             channel_cols = get_channel_columns(example_bead_df)
             if len(channel_cols) < 2:
-                st.error("Bead dataframe has fewer than 2 columns, cannot visualize Channel 0/1.")
+                st.error("Bead dataframe has fewer than 2 columns, cannot visualize two columns.")
             else:
                 tabs = st.tabs(["Summary", "DataViz"])
 
@@ -532,10 +528,10 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                 # Tab 0: Summary (table first, then stacked scatter plots)
                 # ============================================================
                 with tabs[0]:
-                    st.subheader("Global Summary of Suspected NOK (All Beads, Both Channels, Raw Only)")
+                    st.subheader("Global Summary of Suspected NOK (All Beads, Both Columns, Raw Only)")
 
                     rows = []
-                    with st.spinner("Running global summary across both channels (raw only)..."):
+                    with st.spinner("Running global summary across both columns (raw only)..."):
                         for bead in bead_options:
                             bead_df_for_cols = None
                             for fname in ok_files:
@@ -593,7 +589,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                     rows.append({
                                         "CSV_File": csv_name,
                                         "Bead": bead,
-                                        "Channel": ch_idx,  # int 0/1
+                                        "SignalColumn": str(ch_col),  # store column name
                                         "Status": "LOW" if status == "low" else "HIGH",
                                         "SignalTransform": "Raw Signal",
                                         "Norm_Low_Exceed": m.get("Norm_Low_Exceed", np.nan),
@@ -605,7 +601,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                     if rows:
                         df_summary = pd.DataFrame(rows)
                         df_summary = df_summary.sort_values(
-                            ["CSV_File", "Bead", "Channel", "SignalTransform"]
+                            ["CSV_File", "Bead", "SignalColumn", "SignalTransform"]
                         ).reset_index(drop=True)
                         df_summary["Is_NG"] = df_summary["CSV_File"].str.contains("NG", case=False)
 
@@ -616,35 +612,34 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                         plot_global_metric_scatter(
                             df_summary,
                             "Norm_Low_Exceed",
-                            "Norm_Low_Exceed vs Bead (color = Channel)"
+                            "Norm_Low_Exceed vs Bead (color = Column)"
                         )
                         plot_global_metric_scatter(
                             df_summary,
                             "Norm_High_Exceed",
-                            "Norm_High_Exceed vs Bead (color = Channel)"
+                            "Norm_High_Exceed vs Bead (color = Column)"
                         )
                         plot_global_metric_scatter(
                             df_summary,
                             "Z_Low_Exceed",
-                            "Z_Low_Exceed vs Bead (color = Channel)"
+                            "Z_Low_Exceed vs Bead (color = Column)"
                         )
                         plot_global_metric_scatter(
                             df_summary,
                             "Z_High_Exceed",
-                            "Z_High_Exceed vs Bead (color = Channel)"
+                            "Z_High_Exceed vs Bead (color = Column)"
                         )
                     else:
-                        st.info("No suspected NOK beads found with current thresholds (both channels, raw only).")
+                        st.info("No suspected NOK beads found with current thresholds (both columns, raw only).")
 
                 # ============================================================
-                # Tab 1: DataViz (single tab) + two expanders for channel 0/1
+                # Tab 1: DataViz (single tab) + two expanders for each column
                 # ============================================================
                 with tabs[1]:
                     st.subheader("Data Visualization (Selected Bead, Raw Only)")
-                    st.caption(f"Selected Bead: #{selected_bead} | Channels shown by column index: 0 and 1")
+                    st.caption(f"Selected Bead: #{selected_bead} | Columns shown: first two columns of bead dataframe")
 
-                    def build_observations_for_channel_index(ch_index: int):
-                        col_name = channel_cols[ch_index]  # real col name (hidden in UI)
+                    def build_observations_for_column(col_name: str):
                         ref_obs = []
                         for fname in ok_files:
                             beads = segmented_ok[fname]
@@ -665,10 +660,13 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
 
                         return ref_obs, test_obs
 
-                    with st.expander("Channel 0", expanded=True):
-                        ref_obs, test_obs = build_observations_for_channel_index(0)
+                    col0 = channel_cols[0]
+                    col1 = channel_cols[1]
+
+                    with st.expander(f"{col0}", expanded=True):
+                        ref_obs, test_obs = build_observations_for_column(col0)
                         if not ref_obs or not test_obs:
-                            st.warning("No data for this bead in OK or TEST set (Channel 0).")
+                            st.warning(f"No data for this bead in OK or TEST set ({col0}).")
                         else:
                             ref_t = compute_transformed_signals(ref_obs, mode="raw")
                             test_t = compute_transformed_signals(test_obs, mode="raw")
@@ -678,14 +676,14 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 step_interval=global_step_interval,
                                 norm_lower=global_norm_lower, norm_upper=global_norm_upper,
                                 z_lower=global_z_lower, z_upper=global_z_upper,
-                                title_suffix=f"• Channel 0 • Bead #{selected_bead}"
+                                title_suffix=f"• {col0} • Bead #{selected_bead}"
                             )
 
                             if fig_norm is not None:
                                 plot_top_signals(
                                     ref_t, test_t, status_map,
                                     title=(
-                                        f"Channel 0 • Bead #{selected_bead} • "
+                                        f"{col0} • Bead #{selected_bead} • "
                                         f"Recipe: Norm[{global_norm_lower},{global_norm_upper}] "
                                         f"Z-score[-{global_z_lower},{global_z_upper}] "
                                         f"Step[{global_step_interval}]"
@@ -694,10 +692,10 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 )
                                 st.plotly_chart(fig_norm, use_container_width=True)
 
-                    with st.expander("Channel 1", expanded=False):
-                        ref_obs, test_obs = build_observations_for_channel_index(1)
+                    with st.expander(f"{col1}", expanded=False):
+                        ref_obs, test_obs = build_observations_for_column(col1)
                         if not ref_obs or not test_obs:
-                            st.warning("No data for this bead in OK or TEST set (Channel 1).")
+                            st.warning(f"No data for this bead in OK or TEST set ({col1}).")
                         else:
                             ref_t = compute_transformed_signals(ref_obs, mode="raw")
                             test_t = compute_transformed_signals(test_obs, mode="raw")
@@ -707,14 +705,14 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                 step_interval=global_step_interval,
                                 norm_lower=global_norm_lower, norm_upper=global_norm_upper,
                                 z_lower=global_z_lower, z_upper=global_z_upper,
-                                title_suffix=f"• Channel 1 • Bead #{selected_bead}"
+                                title_suffix=f"• {col1} • Bead #{selected_bead}"
                             )
 
                             if fig_norm is not None:
                                 plot_top_signals(
                                     ref_t, test_t, status_map,
                                     title=(
-                                        f"Channel 1 • Bead #{selected_bead} • "
+                                        f"{col1} • Bead #{selected_bead} • "
                                         f"Recipe: Norm[{global_norm_lower},{global_norm_upper}] "
                                         f"Z-score[-{global_z_lower},{global_z_upper}] "
                                         f"Step[{global_step_interval}]"

@@ -681,8 +681,8 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
 
                         st.markdown("### Global Severity Scatter (NOK-only dots)")
                         plot_global_metric_scatter(df_summary, "Norm_Low_Exceed", "Norm_Low_Exceed vs Bead (color = Column)")
-                        plot_global_metric_scatter(df_summary, "Norm_High_Exceed", "Norm_High_Exceed vs Bead (color = Column)")
                         plot_global_metric_scatter(df_summary, "Z_Low_Exceed", "Z_Low_Exceed vs Bead (color = Column)")
+                        plot_global_metric_scatter(df_summary, "Norm_High_Exceed", "Norm_High_Exceed vs Bead (color = Column)")
                         plot_global_metric_scatter(df_summary, "Z_High_Exceed", "Z_High_Exceed vs Bead (color = Column)")
 
                 # ============================================================

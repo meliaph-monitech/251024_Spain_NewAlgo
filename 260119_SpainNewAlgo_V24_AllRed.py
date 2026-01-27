@@ -391,7 +391,7 @@ def plot_top_signals(ref_transformed, test_transformed, status_map, title, y_lab
         if status == "low":
             color, width, label = "red", 2, "LOW"
         elif status == "high":
-            color, width, label = "orange", 2, "HIGH"
+            color, width, label = "red", 2, "HIGH"
         else:
             color, width, label = "green", 1, "OK-like"
 

@@ -70,10 +70,10 @@ if "summary_cache" not in st.session_state:
 # Persisted "applied" thresholds so bead select doesn't change them until user submits
 if "applied_params" not in st.session_state:
     st.session_state.applied_params = {
-        "global_norm_lower": -0.7,
+        "global_norm_lower": -1.0,
         "global_norm_upper": 4.0,
-        "global_z_lower": 4.5,
-        "global_z_upper": 10.0,
+        "global_z_lower": 6.0,
+        "global_z_upper": 40.0,
         "global_step_interval": 20,
     }
 
@@ -105,7 +105,7 @@ if uploaded_ok_zip:
             )
             st.session_state.seg_thresh = st.sidebar.number_input(
                 "Segmentation Threshold (OK & TEST share this)",
-                value=0.5
+                value=1.0
             )
             segment_ok_btn = st.sidebar.button("Segment OK Files")
 

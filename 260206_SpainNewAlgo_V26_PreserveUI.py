@@ -433,7 +433,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
     )
     global_norm_upper = st.sidebar.number_input(
         "Global Upper Threshold for 0–1 Normalization (flag HIGH if above)",
-        min_value=-5.0, max_value=5.0, value=10.0, step=0.05
+        min_value=-5.0, max_value=10.0, value=4.0, step=0.05
     )
     global_z_lower = st.sidebar.number_input(
         "Global Z-score Threshold (flag LOW if below -T)",
@@ -441,7 +441,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
     )
     global_z_upper = st.sidebar.number_input(
         "Global Z-score Threshold (flag HIGH if above +T)",
-        min_value=0.5, max_value=20.0, value=20.0, step=0.25
+        min_value=0.5, max_value=40.0, value=20.0, step=0.25
     )
 
     global_step_interval = st.sidebar.slider(

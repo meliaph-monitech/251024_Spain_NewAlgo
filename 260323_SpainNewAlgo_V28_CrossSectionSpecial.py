@@ -118,6 +118,7 @@ def build_label_map(label_df: pd.DataFrame):
     - "OK", "NOK", "0", blank all remain in numbering order
     - only OK/NOK are used in analysis sets
     - 0/blank remain as bead positions but are not added to OK/TEST sets
+    - analysis bead numbering is limited to MAX 4 beads
     """
     label_map = {}
     bead_cols = [str(i) for i in range(1, 7) if str(i) in label_df.columns]
@@ -142,6 +143,9 @@ def build_label_map(label_df: pd.DataFrame):
 
             renumbered.append((orig_idx, final_label))
 
+        # 🔥 FIX: keep only the first 4 analysis bead positions
+        renumbered = renumbered[:4]
+
         bead_info = {}
         for new_idx, (orig_idx, label) in enumerate(renumbered, start=1):
             bead_info[new_idx] = {
@@ -158,7 +162,8 @@ def get_all_bead_options_from_label_map(label_map):
     bead_set = set()
     for _, bead_info in label_map.items():
         bead_set.update(bead_info.keys())
-    return sorted(bead_set)
+    # 🔥 FIX: never expose more than 4 bead numbers
+    return sorted([b for b in bead_set if b <= 4])
 
 
 # ============================================================

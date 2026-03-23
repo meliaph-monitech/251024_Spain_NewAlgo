@@ -5,7 +5,6 @@ import zipfile
 import os
 import tempfile
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 st.set_page_config(layout="wide")
 
@@ -40,18 +39,97 @@ def aggregate_for_step(x, y, interval):
     return agg_x, np.array(agg_y)
 
 
-def short_label(csv_name):
-    base = os.path.basename(csv_name)
-    return base[:6]
-
-
 def get_channel_columns(df):
     cols = df.columns.tolist()
     return cols[:2] if len(cols) >= 2 else []
 
 
 # ============================================================
-# Label Processing
+# Core Analysis Function (FIXED)
+# ============================================================
+def compute_step_normalization_and_flags(
+    ref_obs,
+    test_obs,
+    step_interval,
+    norm_lower,
+    norm_upper,
+    z_lower,
+    z_upper,
+    title_suffix
+):
+    ok_arrays = []
+    for obs in ref_obs:
+        y = obs["transformed"]
+        x = np.arange(len(y))
+        _, step_y = aggregate_for_step(x, y, step_interval)
+        if len(step_y) > 0:
+            ok_arrays.append(step_y)
+
+    test_arrays = []
+    for obs in test_obs:
+        y = obs["transformed"]
+        x = np.arange(len(y))
+        _, step_y = aggregate_for_step(x, y, step_interval)
+        if len(step_y) > 0:
+            test_arrays.append(step_y)
+
+    if not ok_arrays or not test_arrays:
+        return None, {}, {}
+
+    min_len = min(min(len(x) for x in ok_arrays), min(len(x) for x in test_arrays))
+
+    ok_matrix = np.vstack([x[:min_len] for x in ok_arrays])
+
+    mu = np.median(ok_matrix, axis=0)
+    sigma = np.std(ok_matrix, axis=0)
+    sigma[sigma < 1e-12] = 1e-12
+
+    min_ok = ok_matrix.min(axis=0)
+    max_ok = ok_matrix.max(axis=0)
+    denom = max_ok - min_ok
+    denom[denom < 1e-12] = 1e-12
+
+    fig = go.Figure()
+    status_map = {}
+
+    for obs in test_obs:
+        y = obs["transformed"]
+        x = np.arange(len(y))
+        _, step_y = aggregate_for_step(x, y, step_interval)
+        step_y = step_y[:min_len]
+
+        norm = (step_y - min_ok) / denom
+        z = (step_y - mu) / sigma
+
+        low = (norm < norm_lower).any() or (z < -z_lower).any()
+        high = (norm > norm_upper).any() or (z > z_upper).any()
+
+        if low:
+            status = "low"
+            color = "red"
+        elif high:
+            status = "high"
+            color = "orange"
+        else:
+            status = "ok"
+            color = "green"
+
+        status_map[obs["csv"]] = status
+
+        fig.add_trace(go.Scatter(
+            y=norm,
+            mode="lines",
+            name=obs["csv"],
+            line=dict(color=color)
+        ))
+
+    fig.update_layout(title=f"Step Analysis {title_suffix}")
+
+    return fig, status_map, {}
+
+
+# ============================================================
+# Label Mapping
 # ============================================================
 def build_label_map(label_df):
     label_map = {}
@@ -65,10 +143,6 @@ def build_label_map(label_df):
 
             if val in ["OK", "NOK"]:
                 kept.append((i, val))
-            elif val == "IGNORE":
-                continue
-            elif val in ["0", "0.0", ""]:
-                continue
 
         bead_info = {}
         for new_idx, (orig_idx, label) in enumerate(kept, start=1):
@@ -81,18 +155,6 @@ def build_label_map(label_df):
 
     return label_map
 
-
-# ============================================================
-# Session State
-# ============================================================
-if "segmented_ok" not in st.session_state:
-    st.session_state.segmented_ok = None
-if "segmented_test" not in st.session_state:
-    st.session_state.segmented_test = None
-if "data_ready" not in st.session_state:
-    st.session_state.data_ready = False
-if "analysis_mode" not in st.session_state:
-    st.session_state.analysis_mode = "Per-Bead"
 
 # ============================================================
 # STEP 0: Upload ZIP
@@ -113,32 +175,32 @@ if uploaded_zip:
     selected_subfolder = st.sidebar.selectbox("Select Data Folder", subfolders)
     selected_label = st.sidebar.selectbox("Select Label CSV", csv_files)
 
-    st.session_state.analysis_mode = st.sidebar.radio(
-        "Analysis Mode",
-        ["Per-Bead", "Global"]
-    )
+    analysis_mode = st.sidebar.radio("Analysis Mode", ["Per-Bead", "Global"])
 
     if st.sidebar.button("Apply Data"):
-        st.session_state.data_dir = os.path.join(temp_dir, selected_subfolder)
-        label_path = os.path.join(temp_dir, selected_label)
 
-        label_df = pd.read_csv(label_path)
-        st.session_state.label_map = build_label_map(label_df)
+        data_dir = os.path.join(temp_dir, selected_subfolder)
+        label_df = pd.read_csv(os.path.join(temp_dir, selected_label))
+        label_map = build_label_map(label_df)
 
-        st.session_state.data_ready = True
-        st.success("✅ Data Loaded")
+        st.session_state.data_dir = data_dir
+        st.session_state.label_map = label_map
+        st.session_state.analysis_mode = analysis_mode
+        st.session_state.ready = True
+
+        st.success("✅ Data Ready")
 
 # ============================================================
 # STEP 1: Segmentation
 # ============================================================
-if st.session_state.data_ready:
+if st.session_state.get("ready"):
 
-    st.sidebar.header("Step 1: Segment Files")
+    st.sidebar.header("Step 1: Segment")
 
     sample_file = os.listdir(st.session_state.data_dir)[0]
     sample_df = pd.read_csv(os.path.join(st.session_state.data_dir, sample_file))
 
-    seg_col = st.sidebar.selectbox("Segmentation Column", sample_df.columns)
+    seg_col = st.sidebar.selectbox("Seg Column", sample_df.columns)
     seg_thresh = st.sidebar.number_input("Threshold", value=1.0)
 
     if st.sidebar.button("Segment Files"):
@@ -147,8 +209,8 @@ if st.session_state.data_ready:
         segmented_test = {}
 
         for fname, bead_info in st.session_state.label_map.items():
-            path = os.path.join(st.session_state.data_dir, fname)
 
+            path = os.path.join(st.session_state.data_dir, fname)
             if not os.path.exists(path):
                 continue
 
@@ -185,7 +247,7 @@ if st.session_state.data_ready:
 # ============================================================
 # STEP 2: Analysis
 # ============================================================
-if st.session_state.segmented_ok and st.session_state.segmented_test:
+if st.session_state.get("segmented_ok"):
 
     segmented_ok = st.session_state.segmented_ok
     segmented_test = st.session_state.segmented_test
@@ -202,57 +264,44 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
 
     selected_bead = st.sidebar.selectbox("Select Bead", bead_options)
 
-    # ========================================================
-    # Build Reference
-    # ========================================================
     def build_ref(col):
         if st.session_state.analysis_mode == "Per-Bead":
             return [
-                {"csv": f"{f}|B{selected_bead}", "data": df[col]}
+                {"csv": f"{f}|B{selected_bead}", "transformed": np.array(beads[selected_bead][col])}
                 for f, beads in segmented_ok.items()
                 if selected_bead in beads
-                for df in [beads[selected_bead]]
             ]
         else:
             return [
-                {"csv": f"{f}|B{k}", "data": df[col]}
+                {"csv": f"{f}|B{k}", "transformed": np.array(df[col])}
                 for f, beads in segmented_ok.items()
                 for k, df in beads.items()
             ]
 
     def build_test(col):
         return [
-            {"csv": f"{f}|B{selected_bead}", "data": df[col]}
+            {"csv": f"{f}|B{selected_bead}", "transformed": np.array(beads[selected_bead][col])}
             for f, beads in segmented_test.items()
             if selected_bead in beads
-            for df in [beads[selected_bead]]
         ]
 
-    # ========================================================
-    # Visualization
-    # ========================================================
     example_df = list(segmented_ok.values())[0][selected_bead]
     cols = get_channel_columns(example_df)
 
-    tabs = st.tabs(["DataViz"])
+    for col in cols:
 
-    with tabs[0]:
-        for col in cols:
+        ref = build_ref(col)
+        test = build_test(col)
 
-            ref = build_ref(col)
-            test = build_test(col)
+        fig, _, _ = compute_step_normalization_and_flags(
+            ref, test,
+            step_interval,
+            norm_low,
+            norm_high,
+            z_low,
+            z_high,
+            col
+        )
 
-            ref = [{"csv": x["csv"], "transformed": np.array(x["data"])} for x in ref]
-            test = [{"csv": x["csv"], "transformed": np.array(x["data"])} for x in test]
-
-            fig, status_map, _ = compute_step_normalization_and_flags(
-                ref, test,
-                step_interval,
-                norm_low,
-                norm_high,
-                z_low,
-                z_high,
-                title_suffix=col
-            )
-
+        if fig:
             st.plotly_chart(fig, use_container_width=True)

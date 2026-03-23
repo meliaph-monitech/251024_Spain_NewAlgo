@@ -101,16 +101,15 @@ def build_label_map(label_df: pd.DataFrame):
 # ============================================================
 def get_all_bead_options_from_label_map(label_map):
     """
-    Use MOST COMMON bead count after Ignore-remapping,
-    but never expose more than 4 bead numbers.
+    Use MOST COMMON bead count after Ignore-remapping
     """
+
     bead_counts = [len(v) for v in label_map.values() if len(v) > 0]
 
     if not bead_counts:
         return []
 
     most_common_count = Counter(bead_counts).most_common(1)[0][0]
-    most_common_count = min(most_common_count, 4)
 
     return list(range(1, most_common_count + 1))
 

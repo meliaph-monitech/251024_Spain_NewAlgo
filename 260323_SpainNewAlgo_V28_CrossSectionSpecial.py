@@ -58,9 +58,6 @@ def make_obs_id(fname: str, bead_no: int) -> str:
 
 
 def parse_obs_id(obs_id: str):
-    """
-    Returns (filename, bead_no_or_None)
-    """
     s = str(obs_id)
     if "__B" in s:
         left, right = s.rsplit("__B", 1)
@@ -110,37 +107,43 @@ def build_label_map(label_df: pd.DataFrame):
         "file.csv": {
             1: {"orig_idx": 2, "label": "OK"},
             2: {"orig_idx": 3, "label": "NOK"},
+            3: {"orig_idx": 6, "label": "0"},
             ...
         }
     }
 
     Rule:
     - original columns 1..6 are original bead indices
-    - keep only cells marked OK or NOK
-    - ignore 0 / Ignore / blank
-    - after filtering, reindex remaining valid beads from 1..N
+    - "Ignore" is removed from numbering entirely
+    - "OK", "NOK", "0", blank all remain in numbering order
+    - only OK/NOK are used in analysis sets
+    - 0/blank remain as bead positions but are not added to OK/TEST sets
     """
     label_map = {}
-
     bead_cols = [str(i) for i in range(1, 7) if str(i) in label_df.columns]
 
     for _, row in label_df.iterrows():
         fname = os.path.basename(str(row["FileName"]).strip())
-        kept = []
+        renumbered = []
 
         for col in bead_cols:
             cell = normalize_label_value(row[col])
             orig_idx = int(col)
 
-            if cell in {"OK", "NOK"}:
-                kept.append((orig_idx, cell))
-            elif cell in {"IGNORE", "0", "0.0", ""}:
-                continue
-            else:
+            if cell == "IGNORE":
                 continue
 
+            if cell in {"OK", "NOK"}:
+                final_label = cell
+            elif cell in {"0", "0.0", ""}:
+                final_label = "0"
+            else:
+                final_label = "0"
+
+            renumbered.append((orig_idx, final_label))
+
         bead_info = {}
-        for new_idx, (orig_idx, label) in enumerate(kept, start=1):
+        for new_idx, (orig_idx, label) in enumerate(renumbered, start=1):
             bead_info[new_idx] = {
                 "orig_idx": orig_idx,
                 "label": label
@@ -149,6 +152,13 @@ def build_label_map(label_df: pd.DataFrame):
         label_map[fname] = bead_info
 
     return label_map
+
+
+def get_all_bead_options_from_label_map(label_map):
+    bead_set = set()
+    for _, bead_info in label_map.items():
+        bead_set.update(bead_info.keys())
+    return sorted(bead_set)
 
 
 # ============================================================
@@ -179,6 +189,9 @@ if "source_applied" not in st.session_state:
 
 if "selected_bead_applied" not in st.session_state:
     st.session_state.selected_bead_applied = None
+
+if "all_bead_options" not in st.session_state:
+    st.session_state.all_bead_options = []
 
 # Versioning to invalidate caches when data changes
 if "data_version" not in st.session_state:
@@ -230,6 +243,7 @@ if uploaded_data_zip is not None:
         st.session_state.segmented_ok = None
         st.session_state.segmented_test = None
         st.session_state.selected_bead_applied = None
+        st.session_state.all_bead_options = []
         st.session_state.summary_cache["key"] = None
         st.session_state.summary_cache["df_summary"] = None
 
@@ -281,10 +295,13 @@ if uploaded_data_zip is not None:
             elif missing_required:
                 st.sidebar.error(f"Label CSV is missing required column(s): {missing_required}")
             else:
+                label_map = build_label_map(label_df)
+
                 st.session_state.data_root_dir = extracted_root
                 st.session_state.data_dir = data_dir_abs
                 st.session_state.label_path = label_path_abs
-                st.session_state.label_map = build_label_map(label_df)
+                st.session_state.label_map = label_map
+                st.session_state.all_bead_options = get_all_bead_options_from_label_map(label_map)
                 st.session_state.analysis_mode = selected_analysis_mode
                 st.session_state.source_applied = True
 
@@ -367,6 +384,7 @@ if st.session_state.source_applied and st.session_state.data_dir is not None:
 
                 for new_idx, meta in bead_info.items():
                     orig_idx = meta["orig_idx"]
+                    label = meta["label"]
 
                     if orig_idx > len(bead_ranges):
                         insufficient_bead_rows.append((fname, orig_idx, len(bead_ranges)))
@@ -375,10 +393,12 @@ if st.session_state.source_applied and st.session_state.data_dir is not None:
                     start, end = bead_ranges[orig_idx - 1]
                     bead_df = df.iloc[start:end + 1].reset_index(drop=True)
 
-                    if meta["label"] == "OK":
+                    if label == "OK":
                         ok_dict[new_idx] = bead_df
-                    elif meta["label"] == "NOK":
+                    elif label == "NOK":
                         test_dict[new_idx] = bead_df
+                    # label == "0" is intentionally not added to OK / TEST,
+                    # but the bead number still exists through label_map / all_bead_options
 
                 if ok_dict:
                     segmented_ok[fname] = ok_dict
@@ -727,14 +747,10 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
     ok_files = sorted(segmented_ok.keys())
     test_files = sorted(segmented_test.keys())
 
-    # Bead options
-    bead_ok = set()
-    for _, beads in segmented_ok.items():
-        bead_ok.update(beads.keys())
-    bead_test = set()
-    for _, beads in segmented_test.items():
-        bead_test.update(beads.keys())
-    bead_options = sorted(bead_ok.intersection(bead_test))
+    # IMPORTANT:
+    # Use bead numbers derived from label_map after Ignore-remapping,
+    # not intersection of OK/TEST-only segmented sets.
+    bead_options = st.session_state.all_bead_options
 
     # ---- Step 3 uses a FORM so bead selection won't "apply" changes unless submitted
     st.sidebar.header("Step 3: Global Thresholds & Step Interval")
@@ -788,7 +804,7 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
 
     st.sidebar.header("Step 4: Bead for Analysis")
     if not bead_options:
-        st.warning("No common bead numbers found in both OK and TEST sets.")
+        st.warning("No bead numbers available after applying label remapping.")
     else:
         with st.sidebar.form("bead_selection_form", clear_on_submit=False):
             default_bead = bead_options[0] if st.session_state.selected_bead_applied not in bead_options else st.session_state.selected_bead_applied
@@ -816,7 +832,10 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                     break
 
         if example_bead_df is None:
-            st.error("Selected bead not found in segmented data.")
+            st.warning(
+                f"Bead #{selected_bead} exists in the remapped numbering, "
+                f"but currently has no OK or TEST data to visualize directly."
+            )
         else:
             signal_cols = get_channel_columns(example_bead_df)
             if len(signal_cols) < 2:
@@ -954,10 +973,10 @@ if st.session_state.segmented_ok and st.session_state.segmented_test:
                                         if status == "ok":
                                             continue
                                         m = metrics_map.get(obs_id, {})
-                                        original_csv, _ = parse_obs_id(obs_id)
+                                        original_csv, bead_from_id = parse_obs_id(obs_id)
                                         rows.append({
                                             "CSV_File": original_csv,
-                                            "Bead": bead,
+                                            "Bead": bead_from_id if bead_from_id is not None else bead,
                                             "SignalColumn": str(col_name),
                                             "Status": "LOW" if status == "low" else "HIGH",
                                             "SignalTransform": "Raw Signal",

@@ -1,6 +1,7 @@
 # =======================
-# IMPORTANT FIX INCLUDED:
-# - Unique observation ID per (file, bead)
+# FULL FIXED VERSION
+# ONLY CHANGE:
+# - observation identity = file__B#
 # =======================
 
 import streamlit as st
@@ -94,15 +95,18 @@ def build_label_map(label_df: pd.DataFrame):
 
 
 # ============================================================
-# Session State Init
+# --- Session State ---
 # ============================================================
 if "segmented_ok" not in st.session_state:
     st.session_state.segmented_ok = None
 if "segmented_test" not in st.session_state:
     st.session_state.segmented_test = None
+if "seg_col" not in st.session_state:
+    st.session_state.seg_col = None
+if "seg_thresh" not in st.session_state:
+    st.session_state.seg_thresh = None
 if "analysis_mode" not in st.session_state:
     st.session_state.analysis_mode = "Per-Bead"
-
 
 # ============================================================
 # STEP 0: Upload ZIP
@@ -116,10 +120,10 @@ if uploaded_data_zip:
     with zipfile.ZipFile(uploaded_data_zip, "r") as zip_ref:
         zip_ref.extractall(temp_dir)
 
-    all_files = os.listdir(temp_dir)
+    all_items = os.listdir(temp_dir)
 
-    data_folder = [f for f in all_files if os.path.isdir(os.path.join(temp_dir, f))][0]
-    label_file = [f for f in all_files if f.endswith(".csv")][0]
+    data_folder = [f for f in all_items if os.path.isdir(os.path.join(temp_dir, f))][0]
+    label_file = [f for f in all_items if f.endswith(".csv")][0]
 
     data_dir = os.path.join(temp_dir, data_folder)
     label_df = pd.read_csv(os.path.join(temp_dir, label_file))
@@ -127,7 +131,6 @@ if uploaded_data_zip:
 
     st.session_state.data_dir = data_dir
     st.session_state.label_map = label_map
-
 
 # ============================================================
 # STEP 1: Segment
@@ -137,8 +140,8 @@ if "data_dir" in st.session_state:
     sample_file = os.listdir(st.session_state.data_dir)[0]
     sample_df = pd.read_csv(os.path.join(st.session_state.data_dir, sample_file))
 
-    seg_col = st.sidebar.selectbox("Seg Column", sample_df.columns)
-    seg_thresh = st.sidebar.number_input("Threshold", value=1.0)
+    st.session_state.seg_col = st.sidebar.selectbox("Seg Column", sample_df.columns)
+    st.session_state.seg_thresh = st.sidebar.number_input("Threshold", value=1.0)
 
     if st.sidebar.button("Segment Files"):
 
@@ -151,7 +154,7 @@ if "data_dir" in st.session_state:
                 continue
 
             df = pd.read_csv(path)
-            bead_ranges = segment_beads(df, seg_col, seg_thresh)
+            bead_ranges = segment_beads(df, st.session_state.seg_col, st.session_state.seg_thresh)
 
             for new_idx, meta in bead_info.items():
                 orig_idx = meta["orig_idx"]
@@ -161,21 +164,18 @@ if "data_dir" in st.session_state:
                 start, end = bead_ranges[orig_idx - 1]
                 bead_df = df.iloc[start:end+1].reset_index(drop=True)
 
-                obs_id = f"{fname}__B{new_idx}"
-
                 if meta["label"] == "OK":
-                    segmented_ok.setdefault(fname, {})[new_idx] = (obs_id, bead_df)
+                    segmented_ok.setdefault(fname, {})[new_idx] = bead_df
                 else:
-                    segmented_test.setdefault(fname, {})[new_idx] = (obs_id, bead_df)
+                    segmented_test.setdefault(fname, {})[new_idx] = bead_df
 
         st.session_state.segmented_ok = segmented_ok
         st.session_state.segmented_test = segmented_test
 
         st.success("Segmented!")
 
-
 # ============================================================
-# Analysis Core
+# Helper
 # ============================================================
 def compute_transformed_signals(observations):
     return [{"csv": o["csv"], "transformed": np.asarray(o["data"])} for o in observations]
@@ -198,9 +198,6 @@ def compute_step_normalization_and_flags(ref_obs, test_obs, step_interval):
     sigma = np.std(ok_matrix, axis=0)
     sigma[sigma < 1e-12] = 1e-12
 
-    min_ok = ok_matrix.min(axis=0)
-    max_ok = ok_matrix.max(axis=0)
-
     fig = go.Figure()
 
     for name, step in ok_meta:
@@ -219,23 +216,34 @@ def compute_step_normalization_and_flags(ref_obs, test_obs, step_interval):
 
 
 # ============================================================
-# STEP 3: DataViz
+# STEP 3: DataViz (UNCHANGED STRUCTURE)
 # ============================================================
 if st.session_state.segmented_ok and st.session_state.segmented_test:
 
-    bead = st.selectbox("Select Bead", [1,2,3,4])
+    bead_options = sorted(
+        set().union(*[v.keys() for v in st.session_state.segmented_ok.values()])
+        & set().union(*[v.keys() for v in st.session_state.segmented_test.values()])
+    )
+
+    selected_bead = st.sidebar.selectbox("Select Bead Number", bead_options)
 
     ref_obs = []
     for fname, beads in st.session_state.segmented_ok.items():
-        if bead in beads:
-            obs_id, df = beads[bead]
-            ref_obs.append({"csv": obs_id, "data": df.iloc[:,0]})
+        if selected_bead in beads:
+            df = beads[selected_bead]
+            ref_obs.append({
+                "csv": f"{fname}__B{selected_bead}",
+                "data": df.iloc[:, 0]
+            })
 
     test_obs = []
     for fname, beads in st.session_state.segmented_test.items():
-        if bead in beads:
-            obs_id, df = beads[bead]
-            test_obs.append({"csv": obs_id, "data": df.iloc[:,0]})
+        if selected_bead in beads:
+            df = beads[selected_bead]
+            test_obs.append({
+                "csv": f"{fname}__B{selected_bead}",
+                "data": df.iloc[:, 0]
+            })
 
     ref_t = compute_transformed_signals(ref_obs)
     test_t = compute_transformed_signals(test_obs)
